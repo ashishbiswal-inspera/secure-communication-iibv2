@@ -1,0 +1,13 @@
+{
+  "name": "pocsrg",
+  "private": true,
+  "scripts": {
+    "frontend": "cd frontend && npm run dev",
+    "backend": "cd backend && go run main.go",
+    "dev": "npm-run-all --parallel frontend backend",
+    "launch-all": "npm run dev && timeout 5 && start \"\" \"C:\\Users\\ubaid\\OneDrive\\Documents\\Icewrom\\iceworm\\build.release\\Inspera Browser\\iceworm.exe\" \"C:\\Users\\ubaid\\OneDrive\\Documents\\Icewrom\\iceworm\\test_config.json\""
+  },
+  "devDependencies": {
+    "npm-run-all": "^4.1.5"
+  }
+}
