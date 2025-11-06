@@ -60,3 +60,5 @@ desktop.ini
 *.pid.lock
 *.bak
 *.swp
+
+.turbo
