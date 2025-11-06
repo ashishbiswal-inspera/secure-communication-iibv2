@@ -100,9 +100,21 @@ func handlePost(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
+// handlePing is a simple ping endpoint to check server health
+func handlePing(w http.ResponseWriter, r *http.Request) {
+	response := Response{
+		Success: true,
+		Message: "pong pong",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
 func main() {
 	http.HandleFunc("/api/get", withCors(handleGet))
 	http.HandleFunc("/api/post", withCors(handlePost))
+	http.HandleFunc("/api/ping", withCors(handlePing))
 
 	log.Println("Server running on http://localhost:9000")
 	log.Fatal(http.ListenAndServe(":9000", nil))

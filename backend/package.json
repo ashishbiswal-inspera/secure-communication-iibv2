@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "go run main.go"
+    "dev": "air",
+    "dev:nowatch": "go run main.go"
   }
 }

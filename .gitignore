@@ -23,8 +23,10 @@ node_modules/
 backend/bin/
 backend/build/
 backend/vendor/
+backend/tmp/
 backend/*.exe
 backend/*.out
+backend/build-errors.log
 
 # === Iceworm / local runtime (do NOT commit) ===
 # Common local locations — keep binaries & CEF resources out of the repo
