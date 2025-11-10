@@ -15,6 +15,11 @@
     "install:all": "npm install --workspaces"
   },
   "devDependencies": {
+    "@types/node": "^24.10.0",
     "turbo": "^1.11.2"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "^4.1.17",
+    "tailwindcss": "^4.1.17"
   }
 }

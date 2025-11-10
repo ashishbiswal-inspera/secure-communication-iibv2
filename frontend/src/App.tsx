@@ -1,5 +1,5 @@
 import { useState } from "react";
-import "./App.css";
+import { Button } from "@/components/ui/button";
 
 interface ApiRequest {
   name: string;
@@ -74,33 +74,87 @@ function App() {
   };
 
   return (
-    <div className="app">
-      <h1>React + Go API Test</h1>
-
-      <div className="button-container">
-        <button onClick={handleGet} disabled={loading} className="get-button">
-          GET Request
-        </button>
-
-        <button onClick={handlePost} disabled={loading} className="post-button">
-          POST Request
-        </button>
-      </div>
-
-      {loading && <p className="loading">Loading...</p>}
-
-      {response && (
-        <div className={`response ${response.success ? "success" : "error"}`}>
-          <h3>Response:</h3>
-          <p>
-            <strong>Success:</strong> {response.success ? "Yes" : "No"}
-          </p>
-          <p>
-            <strong>Message:</strong> {response.message}
-          </p>
-          {response.data && <pre>{JSON.stringify(response.data, null, 2)}</pre>}
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-purple-900 to-slate-950 flex items-center justify-center p-8">
+      <div className="max-w-2xl w-full space-y-8">
+        {/* Header */}
+        <div className="text-center space-y-3">
+          <h1 className="text-5xl font-bold bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-600 bg-clip-text text-transparent">
+            React + Go API
+          </h1>
+          <p className="text-slate-400">Test your API endpoints</p>
         </div>
-      )}
+
+        {/* Buttons */}
+        <div className="flex gap-4 justify-center">
+          <Button
+            onClick={handleGet}
+            disabled={loading}
+            variant="default"
+            size="lg"
+            className="bg-green-600 hover:bg-green-700 text-white"
+          >
+            GET Request
+          </Button>
+
+          <Button
+            onClick={handlePost}
+            disabled={loading}
+            variant="default"
+            size="lg"
+            className="bg-blue-600 hover:bg-blue-700 text-white"
+          >
+            POST Request
+          </Button>
+        </div>
+
+        {/* Loading */}
+        {loading && (
+          <div className="text-center">
+            <p className="text-slate-400 animate-pulse">Loading...</p>
+          </div>
+        )}
+
+        {/* Response */}
+        {response && (
+          <div
+            className={`p-6 rounded-xl border-2 backdrop-blur-sm animate-in fade-in duration-300 ${
+              response.success
+                ? "bg-green-950/30 border-green-500 text-green-100"
+                : "bg-red-950/30 border-red-500 text-red-100"
+            }`}
+          >
+            <h3 className="text-xl font-bold mb-4">Response:</h3>
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-slate-300">Success:</span>
+                <span
+                  className={`px-2 py-1 rounded text-sm font-bold ${
+                    response.success
+                      ? "bg-green-500/20 text-green-300"
+                      : "bg-red-500/20 text-red-300"
+                  }`}
+                >
+                  {response.success ? "✓ Yes" : "✗ No"}
+                </span>
+              </div>
+              <div>
+                <span className="font-semibold text-slate-300">Message: </span>
+                <span className="text-white">{response.message}</span>
+              </div>
+              {response.data && (
+                <div>
+                  <span className="font-semibold text-slate-300 block mb-2">
+                    Data:
+                  </span>
+                  <pre className="bg-black/40 border border-slate-700 p-4 rounded-lg overflow-x-auto text-sm text-cyan-300">
+                    {JSON.stringify(response.data, null, 2)}
+                  </pre>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
