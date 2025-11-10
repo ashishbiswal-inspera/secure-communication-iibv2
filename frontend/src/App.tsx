@@ -81,7 +81,9 @@ function App() {
           <h1 className="text-5xl font-bold bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-600 bg-clip-text text-transparent">
             React + Go API - Served from Go!
           </h1>
-          <p className="text-slate-400">Test your API endpoints (Auto-reload enabled)</p>
+          <p className="text-slate-400">
+            Test your API endpoints (Auto-reload enabled sure)
+          </p>
         </div>
 
         {/* Buttons */}
