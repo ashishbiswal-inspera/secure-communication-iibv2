@@ -1,10 +1,16 @@
 package main
 
 import (
+	"embed"
 	"encoding/json"
+	"io/fs"
 	"log"
 	"net/http"
+	"strings"
 )
+
+//go:embed dist
+var distFS embed.FS
 
 // Response represents a standard API response
 type Response struct {
@@ -112,9 +118,45 @@ func handlePing(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	// API routes
 	http.HandleFunc("/api/get", withCors(handleGet))
 	http.HandleFunc("/api/post", withCors(handlePost))
 	http.HandleFunc("/api/ping", withCors(handlePing))
+
+	// Serve embedded frontend files
+	distFSStripped, err := fs.Sub(distFS, "dist")
+	if err != nil {
+		log.Fatal("Failed to access embedded dist folder:", err)
+	}
+
+	// Handle all non-API routes by serving the React app
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// If the path starts with /api, it will be handled by the API handlers above
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			http.NotFound(w, r)
+			return
+		}
+
+		// Try to open the file from embedded FS
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		if path == "" {
+			path = "index.html"
+		}
+
+		file, err := distFSStripped.Open(path)
+		if err != nil {
+			// If file not found, serve index.html for client-side routing
+			file, err = distFSStripped.Open("index.html")
+			if err != nil {
+				http.Error(w, "Could not open index.html", http.StatusInternalServerError)
+				return
+			}
+		}
+		defer file.Close()
+
+		// Serve the file
+		http.FileServer(http.FS(distFSStripped)).ServeHTTP(w, r)
+	})
 
 	log.Println("Server running on http://localhost:9000")
 	log.Fatal(http.ListenAndServe(":9000", nil))

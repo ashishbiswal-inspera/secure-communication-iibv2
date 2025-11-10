@@ -19,7 +19,7 @@ function App() {
   const handleGet = async () => {
     setLoading(true);
     try {
-      const res = await fetch("http://localhost:9000/api/get");
+      const res = await fetch("/api/get");
       const data: ApiResponse = await res.json();
       setResponse(data);
 
@@ -47,7 +47,7 @@ function App() {
         email: "john.doe@example.com",
       };
 
-      const res = await fetch("http://localhost:9000/api/post", {
+      const res = await fetch("/api/post", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -79,9 +79,9 @@ function App() {
         {/* Header */}
         <div className="text-center space-y-3">
           <h1 className="text-5xl font-bold bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-600 bg-clip-text text-transparent">
-            React + Go API
+            React + Go API - Served from Go!
           </h1>
-          <p className="text-slate-400">Test your API endpoints</p>
+          <p className="text-slate-400">Test your API endpoints (Auto-reload enabled)</p>
         </div>
 
         {/* Buttons */}

@@ -9,6 +9,8 @@
     "dev": "turbo run dev --parallel",
     "dev:frontend": "cd frontend && npm run dev",
     "dev:backend": "cd backend && npm run dev",
+    "dev:standalone": "cd frontend && npm run dev:vite",
+    "build:frontend": "cd frontend && npm run build",
     "iw": "start \"Iceworm\" \"./Inspera Browser/iceworm.exe\" \"./iiw_config.json\"",
     "dev:iw": "start /B cmd /C \"npm run dev\" && timeout /T 5 /NOBREAK && start \"Iceworm\" \"./Inspera Browser/iceworm.exe\" \"./iiw_config.json\"",
     "kill:win-ports": "powershell -Command \"Get-NetTCPConnection | Where-Object {($_.LocalPort -ge 5173 -and $_.LocalPort -le 5180) -or $_.LocalPort -eq 9000} | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }\"",
