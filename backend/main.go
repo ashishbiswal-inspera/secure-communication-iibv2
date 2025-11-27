@@ -9,7 +9,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -93,7 +95,7 @@ func generateIIWConfig(port int) (string, error) {
 	uniqueNumber := time.Now().UTC().Unix()
 	configFileName := fmt.Sprintf("iceworm-config-%d.json", uniqueNumber)
 
-	serverURL := fmt.Sprintf("https://127.0.0.1:%d", port)
+	serverURL := fmt.Sprintf("http://127.0.0.1:%d", port)
 
 	// Create config structure
 	config := IIWConfig{
@@ -162,6 +164,58 @@ func cleanupConfigFile(configFile string) {
 			log.Printf("Cleaned up config file: %s", configFile)
 		}
 	}
+}
+
+// launchIceworm starts the Iceworm browser with the generated config file
+// Returns the command object so the caller can monitor the process
+func launchIceworm(configFile string) (*exec.Cmd, error) {
+	icewormPath := filepath.Join("..", "Inspera Browser", "iceworm.exe")
+
+	// Check if iceworm.exe exists
+	if _, err := os.Stat(icewormPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("iceworm.exe not found at %s", icewormPath)
+	}
+
+	// Get absolute path for config file
+	absConfigPath, err := filepath.Abs(configFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get absolute path for config: %w", err)
+	}
+
+	log.Printf("Launching Iceworm browser...")
+	log.Printf("Iceworm path: %s", icewormPath)
+	log.Printf("Config file: %s", absConfigPath)
+
+	// Launch Iceworm with the config file
+	cmd := exec.Command(icewormPath, absConfigPath)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("failed to launch Iceworm: %w", err)
+	}
+
+	log.Printf("Iceworm browser launched with PID: %d", cmd.Process.Pid)
+	return cmd, nil
+}
+
+// watchIcewormProcess monitors the Iceworm process and exits when it closes
+func watchIcewormProcess(cmd *exec.Cmd, configFile string) {
+	// Wait for the Iceworm process to exit
+	err := cmd.Wait()
+
+	if err != nil {
+		log.Printf("Iceworm process exited with error: %v", err)
+	} else {
+		log.Printf("Iceworm process closed (PID: %d)", cmd.Process.Pid)
+	}
+
+	// Cleanup config file
+	cleanupConfigFile(configFile)
+
+	// Exit the backend
+	log.Println("Shutting down backend server...")
+	os.Exit(0)
 }
 
 // enableCors sets the necessary headers for CORS
@@ -349,5 +403,27 @@ func main() {
 		http.FileServer(http.FS(distFSStripped)).ServeHTTP(w, r)
 	})
 
-	log.Fatal(http.ListenAndServe(serverAddr, nil))
+	// Start server in a goroutine
+	go func() {
+		log.Printf("Starting HTTP server on %s", serverAddr)
+		if err := http.ListenAndServe(serverAddr, nil); err != nil {
+			log.Fatal("Server failed:", err)
+		}
+	}()
+
+	// Wait a moment for server to start
+	time.Sleep(500 * time.Millisecond)
+
+	// Launch Iceworm browser
+	icewormCmd, err := launchIceworm(configFile)
+	if err != nil {
+		log.Printf("Warning: Failed to launch Iceworm: %v", err)
+		log.Printf("Server is still running. You can manually launch Iceworm with: %s", configFile)
+		// Block forever since Iceworm didn't launch
+		select {}
+	}
+
+	// Watch Iceworm process - will exit backend when Iceworm closes
+	log.Println("Monitoring Iceworm process...")
+	watchIcewormProcess(icewormCmd, configFile)
 }
