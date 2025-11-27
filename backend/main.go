@@ -1,9 +1,15 @@
 package main
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"embed"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net"
@@ -13,6 +19,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -31,6 +38,28 @@ type Response struct {
 type RequestData struct {
 	Name  string `json:"name"`
 	Email string `json:"email"`
+}
+
+// EncryptedPayload represents an encrypted request/response
+type EncryptedPayload struct {
+	Ciphertext string `json:"ciphertext"` // Base64 encoded
+	Nonce      string `json:"nonce"`      // Base64 encoded GCM nonce
+}
+
+// SecureRequest represents decrypted request with timestamp and nonce for replay protection
+type SecureRequest struct {
+	Timestamp int64       `json:"timestamp"` // Unix timestamp in milliseconds
+	Nonce     string      `json:"nonce"`     // Unique request identifier
+	Payload   interface{} `json:"payload"`   // Actual request data
+}
+
+// SecurityManager handles encryption keys and nonce tracking
+type SecurityManager struct {
+	aesKey       []byte
+	gcm          cipher.AEAD
+	seenNonces   map[string]time.Time
+	nonceMutex   sync.RWMutex
+	nonceTimeout time.Duration
 }
 
 // IIWConfig represents the Iceworm browser configuration
@@ -54,6 +83,7 @@ type IIWConfig struct {
 	StartUrls          []string                `json:"startUrls"`
 	UrlRegexpWindows   map[string]WindowConfig `json:"urlRegexpWindows"`
 	UserAgent          string                  `json:"userAgent"`
+	NoProxyServer      bool                    `json:"noProxyServer"`
 }
 
 // WindowConfig represents window configuration for URL patterns
@@ -71,8 +101,125 @@ type WindowConfig struct {
 	Width            int         `json:"width"`
 }
 
-// Global variable to track generated config file
+// Global variables
 var generatedConfigFile string
+var securityMgr *SecurityManager
+
+// NewSecurityManager creates a new security manager with AES-GCM encryption
+func NewSecurityManager() (*SecurityManager, error) {
+	// Generate random 32-byte AES-256 key
+	key := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, key); err != nil {
+		return nil, fmt.Errorf("failed to generate AES key: %w", err)
+	}
+
+	// Create AES cipher
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create AES cipher: %w", err)
+	}
+
+	// Create GCM mode
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GCM: %w", err)
+	}
+
+	sm := &SecurityManager{
+		aesKey:       key,
+		gcm:          gcm,
+		seenNonces:   make(map[string]time.Time),
+		nonceTimeout: 5 * time.Second,
+	}
+
+	// Start nonce cleanup goroutine
+	go sm.cleanupExpiredNonces()
+
+	return sm, nil
+}
+
+// GetKeyHex returns the AES key as hex string for passing to frontend
+func (sm *SecurityManager) GetKeyHex() string {
+	return hex.EncodeToString(sm.aesKey)
+}
+
+// Encrypt encrypts data using AES-GCM
+func (sm *SecurityManager) Encrypt(plaintext []byte) (*EncryptedPayload, error) {
+	// Generate random nonce
+	nonce := make([]byte, sm.gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, fmt.Errorf("failed to generate nonce: %w", err)
+	}
+
+	// Encrypt
+	ciphertext := sm.gcm.Seal(nil, nonce, plaintext, nil)
+
+	return &EncryptedPayload{
+		Ciphertext: base64.StdEncoding.EncodeToString(ciphertext),
+		Nonce:      base64.StdEncoding.EncodeToString(nonce),
+	}, nil
+}
+
+// Decrypt decrypts data using AES-GCM
+func (sm *SecurityManager) Decrypt(payload *EncryptedPayload) ([]byte, error) {
+	// Decode base64
+	ciphertext, err := base64.StdEncoding.DecodeString(payload.Ciphertext)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode ciphertext: %w", err)
+	}
+
+	nonce, err := base64.StdEncoding.DecodeString(payload.Nonce)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode nonce: %w", err)
+	}
+
+	// Decrypt
+	plaintext, err := sm.gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return nil, fmt.Errorf("decryption failed: %w", err)
+	}
+
+	return plaintext, nil
+}
+
+// ValidateAndTrackNonce checks timestamp and prevents replay attacks
+func (sm *SecurityManager) ValidateAndTrackNonce(secureReq *SecureRequest) error {
+	// Check timestamp (within 5 seconds)
+	now := time.Now().UnixMilli()
+	timeDiff := now - secureReq.Timestamp
+	if timeDiff < 0 || timeDiff > 5000 {
+		return fmt.Errorf("request timestamp expired or invalid (diff: %dms)", timeDiff)
+	}
+
+	// Check if nonce was already used
+	sm.nonceMutex.Lock()
+	defer sm.nonceMutex.Unlock()
+
+	if _, exists := sm.seenNonces[secureReq.Nonce]; exists {
+		return fmt.Errorf("nonce already used (replay attack detected)")
+	}
+
+	// Track this nonce
+	sm.seenNonces[secureReq.Nonce] = time.Now()
+	return nil
+}
+
+// cleanupExpiredNonces periodically removes old nonces to prevent memory leak
+func (sm *SecurityManager) cleanupExpiredNonces() {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		sm.nonceMutex.Lock()
+		cutoff := time.Now().Add(-sm.nonceTimeout)
+		for nonce, timestamp := range sm.seenNonces {
+			if timestamp.Before(cutoff) {
+				delete(sm.seenNonces, nonce)
+			}
+		}
+		sm.nonceMutex.Unlock()
+	}
+}
 
 // getFreePort asks the OS for a free open port that is ready to use
 func getFreePort() (int, error) {
@@ -122,6 +269,7 @@ func generateIIWConfig(port int) (string, error) {
 		QuitUrl:            "",
 		ShareContent:       false,
 		StartUrls:          []string{serverURL},
+		NoProxyServer:      true,
 		UrlRegexpWindows: map[string]WindowConfig{
 			".*": {
 				Height:           1,
@@ -316,7 +464,85 @@ func handlePing(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
+// handleSecurePost handles encrypted POST requests with replay protection
+func handleSecurePost(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Decode encrypted payload
+	var encryptedPayload EncryptedPayload
+	if err := json.NewDecoder(r.Body).Decode(&encryptedPayload); err != nil {
+		log.Printf("Failed to decode encrypted payload: %v", err)
+		http.Error(w, "Invalid encrypted payload", http.StatusBadRequest)
+		return
+	}
+
+	// Decrypt payload
+	plaintext, err := securityMgr.Decrypt(&encryptedPayload)
+	if err != nil {
+		log.Printf("Decryption failed: %v", err)
+		http.Error(w, "Decryption failed", http.StatusUnauthorized)
+		return
+	}
+
+	// Decode secure request (with timestamp and nonce)
+	var secureReq SecureRequest
+	if err := json.Unmarshal(plaintext, &secureReq); err != nil {
+		log.Printf("Failed to unmarshal secure request: %v", err)
+		http.Error(w, "Invalid request format", http.StatusBadRequest)
+		return
+	}
+
+	// Validate timestamp and check for replay attacks
+	if err := securityMgr.ValidateAndTrackNonce(&secureReq); err != nil {
+		log.Printf("Security validation failed: %v", err)
+		http.Error(w, "Security validation failed", http.StatusForbidden)
+		return
+	}
+
+	// Extract actual payload
+	var requestData RequestData
+	payloadBytes, _ := json.Marshal(secureReq.Payload)
+	if err := json.Unmarshal(payloadBytes, &requestData); err != nil {
+		log.Printf("Failed to unmarshal payload: %v", err)
+		http.Error(w, "Invalid payload format", http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("Secure request received: %+v (nonce: %s, timestamp: %d)", requestData, secureReq.Nonce, secureReq.Timestamp)
+
+	// Process request
+	response := Response{
+		Success: true,
+		Message: "Secure data received successfully",
+		Data:    requestData,
+	}
+
+	// Encrypt response
+	responseBytes, _ := json.Marshal(response)
+	encryptedResponse, err := securityMgr.Encrypt(responseBytes)
+	if err != nil {
+		log.Printf("Failed to encrypt response: %v", err)
+		http.Error(w, "Encryption failed", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(encryptedResponse)
+}
+
 func main() {
+	// Initialize security manager with AES-GCM encryption
+	var err error
+	securityMgr, err = NewSecurityManager()
+	if err != nil {
+		log.Fatal("Failed to initialize security manager:", err)
+	}
+	log.Printf("Security initialized with AES-256-GCM encryption")
+	log.Printf("Encryption key (hex): %s", securityMgr.GetKeyHex())
+
 	// Get a free port from the OS
 	port, err := getFreePort()
 	if err != nil {
@@ -367,6 +593,22 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(response)
 	}, serverOrigin))
+
+	// Security key endpoint - provides encryption key to frontend
+	http.HandleFunc("/api/security/key", withCors(func(w http.ResponseWriter, r *http.Request) {
+		response := Response{
+			Success: true,
+			Message: "Encryption key",
+			Data: map[string]interface{}{
+				"key": securityMgr.GetKeyHex(),
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}, serverOrigin))
+
+	// Secure POST endpoint with encryption and replay protection
+	http.HandleFunc("/api/secure/post", withCors(handleSecurePost, serverOrigin))
 
 	// Serve embedded frontend files
 	distFSStripped, err := fs.Sub(distFS, "dist")

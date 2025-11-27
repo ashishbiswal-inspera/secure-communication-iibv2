@@ -1,15 +1,17 @@
 # React-Go-Iceworm Monorepo
 
-A monorepo project using Turborepo to manage a React + TypeScript frontend and a Go backend.
+A secure monorepo project using Turborepo to manage a React + TypeScript frontend and a Go backend, featuring AES-256-GCM encryption and proxy bypass for hardened local communication.
 
 ## Project Structure
 
 ```
 .
 ├── frontend/          # React + Vite + TypeScript application
-├── backend/           # Go API server
+├── backend/           # Go API server with embedded frontend
+├── Inspera Browser/   # Iceworm browser executable
 ├── package.json       # Root workspace configuration
-└── turbo.json         # Turborepo configuration
+├── turbo.json         # Turborepo configuration
+└── SECURITY_IMPLEMENTATION.md  # Detailed security documentation
 ```
 
 ## Prerequisites
@@ -43,14 +45,18 @@ Run both frontend and backend simultaneously using Turborepo:
 npm run dev
 ```
 
-This command starts:
-- **Frontend** (Vite dev server): http://localhost:5173
-- **Backend** (Go API server): http://localhost:9000
+This command:
+1. Builds the frontend (Vite build)
+2. Starts the **Go backend** with embedded frontend on a **dynamic port** (OS-assigned)
+3. **Automatically launches Iceworm browser** with the application
+4. Backend monitors Iceworm process and exits when browser is closed
 
 ### 3. Access the Application
 
-- Open your browser and navigate to **http://localhost:5173**
-- The frontend will communicate with the backend API at **http://localhost:9000**
+- **No manual navigation needed** - Iceworm browser opens automatically
+- Application runs on dynamic port (e.g., `http://localhost:50123`)
+- Port is auto-assigned by the OS to avoid conflicts
+- Iceworm browser configured with `--no-proxy-server` flag for security
 
 ## Available Scripts
 
@@ -68,13 +74,9 @@ This command starts:
 - `npm run preview` - Preview production build
 - `npm run lint` - Run ESLint
 
-### Backend (`cd backend`)
-
-- `npm run dev` - Start Go server (alias for `go run main.go`)
-
 ## API Endpoints
 
-The backend provides the following endpoints:
+### Regular Endpoints (Unencrypted)
 
 - **GET** `/api/get` - Returns a JSON response with status information
   ```json
@@ -107,12 +109,97 @@ The backend provides the following endpoints:
 - React 19
 - TypeScript
 - Vite
-- React Router
+- Web Crypto API (for AES-256-GCM encryption)
+- Embedded in Go binary using `embed` package
 
 ### Backend
-- Go
+- Go (with `embed` for static files)
 - Standard library HTTP server
-- JSON API
+- AES-256-GCM encryption (`crypto/aes`, `crypto/cipher`)
+- Dynamic port allocation
+- Process lifecycle management
+
+### Browser
+- Iceworm (Chromium/CEF-based)
+- Configured with `--no-proxy-server` flag
+- Automatic launch and cleanup
+
+## Security Features
+
+🔒 **Hardened Local Communication** - Defense-in-depth against MITM attacks
+
+1. **Proxy Bypass** - `--no-proxy-server` flag prevents Burp Suite/proxy interception
+2. **Application-Layer Encryption** - AES-256-GCM encrypts all sensitive data
+3. **Replay Protection** - Timestamp (5s window) + UUID nonce validation
+4. **In-Memory Keys** - Encryption keys never written to disk
+## Troubleshooting
+
+### Port Already in Use
+
+**Not an issue!** The backend uses dynamic port allocation - the OS automatically assigns a free port. If you still have port conflicts, the OS will simply assign a different port.
+
+### Iceworm Won't Launch
+
+Make sure the Iceworm executable exists:
+```powershell
+# Check if Iceworm browser exists
+Test-Path ".\Inspera Browser\Iceworm.exe"
+```
+
+If missing, you need the Iceworm browser binary in the `Inspera Browser` directory.
+
+### Backend Won't Start
+
+Check for Go compilation errors:
+```powershell
+### Go Not Found
+
+Make sure Go is installed and in your PATH:
+```powershell
+go version
+```
+
+### npm Install Issues
+
+Try clearing the cache and reinstalling:
+```powershell
+npm cache clean --force
+rm -r node_modules
+npm install
+```
+
+### Encryption Errors in Browser Console
+
+If you see encryption initialization errors:
+1. Make sure backend is running (`npm run dev`)
+2. Check browser console for `/api/security/key` 200 response
+3. Verify encryption status shows "AES-256-GCM Ready" in UI
+
+### Config Files Not Cleaning Up
+
+Temporary config files (`iceworm-config-*.json`) should auto-delete. If they persist:
+```powershell
+# Manually clean old config files
+cd backend
+Remove-Item iceworm-config-*.json
+```
+
+## Quick Test
+
+After starting the app, test the security features:
+
+1. **Test Regular POST**: Click "POST Request" button
+2. **Test Encrypted POST**: Click "Secure POST (Encrypted)" button
+3. **Check Network Tab**: Open DevTools → Network
+   - Regular POST shows plain JSON
+   - Secure POST shows encrypted `{ciphertext, nonce}`
+4. **Test Proxy Bypass**: 
+   - Start Burp Suite as system proxy
+   - App still works (no traffic in Burp Suite)
+
+## License
+
+MITSON API
 
 ### Monorepo
 - Turborepo

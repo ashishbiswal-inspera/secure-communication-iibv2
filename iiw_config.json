@@ -19,6 +19,7 @@
   "noDefaultCefArgs": false,
   "noToolbar": false,
   "quitPasswordHash": "",
+  "noProxyServer": true,
   "quitUrl": "",
   "shareContent": false,
   "startUrls": ["https://127.0.0.1:9000"],

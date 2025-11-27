@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { getServerInfoFromLocation } from "@/lib/secureClient";
+import { getServerInfoFromLocation, apiClient } from "@/lib/secureClient";
 
 interface ApiRequest {
   name: string;
@@ -16,7 +16,21 @@ interface ApiResponse {
 function App() {
   const [response, setResponse] = useState<ApiResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [encryptionReady, setEncryptionReady] = useState(false);
   const { port, serverUrl } = getServerInfoFromLocation();
+
+  // Initialize encryption on mount
+  useEffect(() => {
+    const initEncryption = async () => {
+      try {
+        await apiClient.initializeEncryption();
+        setEncryptionReady(true);
+      } catch (error) {
+        console.error("Failed to initialize encryption:", error);
+      }
+    };
+    initEncryption();
+  }, []);
 
   const handleGet = async () => {
     setLoading(true);
@@ -75,6 +89,44 @@ function App() {
     }
   };
 
+  const handleSecurePost = async () => {
+    if (!encryptionReady) {
+      setResponse({
+        success: false,
+        message: "Encryption not ready",
+      });
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const requestBody: ApiRequest = {
+        name: "Jane Secure",
+        email: "jane@encrypted.com",
+      };
+
+      const data = await apiClient.securePost<ApiRequest>(
+        "/secure/post",
+        requestBody
+      );
+      setResponse(data);
+
+      // Clear response after 2 seconds
+      setTimeout(() => {
+        setResponse(null);
+      }, 2000);
+    } catch (error) {
+      console.error("Secure POST request failed:", error);
+      setResponse({
+        success: false,
+        message: "Secure request failed",
+      });
+      setTimeout(() => setResponse(null), 2000);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-purple-900 to-slate-950 flex items-center justify-center p-8">
       <div className="max-w-2xl w-full space-y-8">
@@ -94,11 +146,19 @@ function App() {
             <p className="text-slate-300">
               <span className="font-semibold text-cyan-400">Port:</span> {port}
             </p>
+            <p className="text-slate-300">
+              <span className="font-semibold text-cyan-400">Encryption:</span>{" "}
+              {encryptionReady ? (
+                <span className="text-green-400">✓ AES-256-GCM Ready</span>
+              ) : (
+                <span className="text-yellow-400">⏳ Initializing...</span>
+              )}
+            </p>
           </div>
         </div>
 
         {/* Buttons */}
-        <div className="flex gap-4 justify-center">
+        <div className="flex gap-4 justify-center flex-wrap">
           <Button
             onClick={handleGet}
             disabled={loading}
@@ -117,6 +177,16 @@ function App() {
             className="bg-blue-600 hover:bg-blue-700 text-white"
           >
             POST Request
+          </Button>
+
+          <Button
+            onClick={handleSecurePost}
+            disabled={loading || !encryptionReady}
+            variant="default"
+            size="lg"
+            className="bg-purple-600 hover:bg-purple-700 text-white"
+          >
+            🔒 Secure POST (Encrypted)
           </Button>
         </div>
 

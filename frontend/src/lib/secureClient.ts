@@ -1,10 +1,18 @@
 /**
- * Secure API Client for mTLS Communication
+ * Secure API Client with AES-GCM Encryption and Replay Protection
  *
- * This client handles all API communication with the Go backend.
- * In Phase 1: Works with mTLS (certificate-based authentication)
- * In Phase 2: Will add HMAC request signing for additional security
+ * This client handles all API communication with the Go backend using:
+ * - Application-level encryption (AES-256-GCM)
+ * - Timestamp validation (5 second window)
+ * - Nonce-based replay protection
+ * - Proxy bypass (--no-proxy-server flag in Iceworm)
  */
+
+import {
+  encryptionManager,
+  EncryptionManager,
+  type EncryptedPayload,
+} from "./encryption";
 
 // Get port and server URL directly from window.location (running in Iceworm browser)
 export function getServerInfoFromLocation(): {
@@ -55,7 +63,7 @@ class SecureApiClient {
   }
 
   /**
-   * Makes a secure POST request
+   * Makes a secure POST request (unencrypted)
    */
   async post<T = unknown>(
     endpoint: string,
@@ -71,6 +79,62 @@ class SecureApiClient {
       },
       body: data ? JSON.stringify(data) : undefined,
     });
+  }
+
+  /**
+   * Makes an ENCRYPTED POST request with replay protection
+   * Uses AES-256-GCM encryption with timestamp and nonce
+   */
+  async securePost<T = unknown>(
+    endpoint: string,
+    data: unknown,
+    options: RequestOptions = {}
+  ): Promise<ApiResponse<T>> {
+    // Ensure encryption is initialized
+    if (!encryptionManager["cryptoKey"]) {
+      throw new Error(
+        "Encryption not initialized. Call initializeEncryption() first."
+      );
+    }
+
+    // Encrypt the payload
+    const encryptedPayload = await encryptionManager.encrypt(data);
+
+    // Send encrypted request - backend returns EncryptedPayload directly, not wrapped
+    const url = `${this.baseUrl}${endpoint}`;
+    const { timeout = 10000 } = options;
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+      body: JSON.stringify(encryptedPayload),
+      signal: controller.signal,
+      credentials: "include",
+    });
+
+    clearTimeout(timeoutId);
+
+    // Backend returns EncryptedPayload directly
+    const encryptedResponse: EncryptedPayload = await response.json();
+
+    // Decrypt the response
+    const decrypted = await encryptionManager.decrypt(encryptedResponse);
+    return decrypted as ApiResponse<T>;
+  }
+
+  /**
+   * Initialize encryption with key from backend
+   */
+  async initializeEncryption(): Promise<void> {
+    const key = await EncryptionManager.fetchKeyFromBackend(serverUrl);
+    await encryptionManager.initialize(key);
+    console.log("✅ End-to-end encryption enabled");
   }
 
   /**
