@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -165,25 +164,6 @@ func cleanupConfigFile(configFile string) {
 	}
 }
 
-// writePortFile writes the port number and config file path for the frontend to read
-func writePortFile(port int, configFile string) error {
-	// Write to backend directory
-	portFile := "port.txt"
-	// Format: port|config_file_path
-	content := fmt.Sprintf("%d|%s", port, configFile)
-	if err := os.WriteFile(portFile, []byte(content), 0644); err != nil {
-		return fmt.Errorf("failed to write port file: %w", err)
-	}
-
-	// Also write to frontend/public for easy access
-	frontendPortFile := filepath.Join("..", "frontend", "public", "port.txt")
-	if err := os.WriteFile(frontendPortFile, []byte(content), 0644); err != nil {
-		log.Printf("Warning: failed to write frontend port file: %v", err)
-	}
-
-	return nil
-}
-
 // enableCors sets the necessary headers for CORS
 func enableCors(w http.ResponseWriter, r *http.Request, serverOrigin string) {
 	origin := r.Header.Get("Origin")
@@ -308,11 +288,6 @@ func main() {
 		cleanupConfigFile(generatedConfigFile)
 		os.Exit(0)
 	}()
-
-	// Write port to file for frontend to read
-	if err := writePortFile(port, configFile); err != nil {
-		log.Fatal("Failed to write port file:", err)
-	}
 
 	serverOrigin := fmt.Sprintf("https://127.0.0.1:%d", port)
 	serverAddr := fmt.Sprintf(":%d", port)
