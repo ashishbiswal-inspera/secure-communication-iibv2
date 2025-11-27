@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { getServerInfoFromLocation } from "@/lib/secureClient";
 
 interface ApiRequest {
   name: string;
@@ -15,6 +16,7 @@ interface ApiResponse {
 function App() {
   const [response, setResponse] = useState<ApiResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const { port, serverUrl } = getServerInfoFromLocation();
 
   const handleGet = async () => {
     setLoading(true);
@@ -84,6 +86,15 @@ function App() {
           <p className="text-slate-400">
             Test your API endpoints (Auto-reload enabled sure)
           </p>
+          <div className="mt-4 p-4 bg-slate-800/50 border border-slate-700 rounded-lg text-sm">
+            <p className="text-slate-300">
+              <span className="font-semibold text-cyan-400">Server:</span>{" "}
+              {serverUrl}
+            </p>
+            <p className="text-slate-300">
+              <span className="font-semibold text-cyan-400">Port:</span> {port}
+            </p>
+          </div>
         </div>
 
         {/* Buttons */}

@@ -7,10 +7,7 @@
     "http://localhost:5173"
   ],
   "cefArgs": {
-    "remote-debugging-port": "9222",
-    "ignore-certificate-errors": "true",
-    "ssl-client-certificate": "certs/client-cert.pem",
-    "ssl-client-key": "certs/client-key.pem"
+    "remote-debugging-port": "9222"
   },
   "downloadCmdDir": "",
   "downloadCmds": null,

@@ -1,15 +1,19 @@
 package main
 
 import (
-	"crypto/tls"
 	"embed"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
 	"strings"
-
-	"backend/certs"
+	"syscall"
+	"time"
 )
 
 //go:embed dist
@@ -28,20 +32,172 @@ type RequestData struct {
 	Email string `json:"email"`
 }
 
+// IIWConfig represents the Iceworm browser configuration
+type IIWConfig struct {
+	AllowCapture       bool                    `json:"allowCapture"`
+	AllowedUrlRegexps  []string                `json:"allowedUrlRegexps"`
+	AllowedUrls        []string                `json:"allowedUrls"`
+	CefArgs            map[string]string       `json:"cefArgs"`
+	DownloadCmdDir     string                  `json:"downloadCmdDir"`
+	DownloadCmds       interface{}             `json:"downloadCmds"`
+	DownloadDir        string                  `json:"downloadDir"`
+	DownloadRegexpCmds interface{}             `json:"downloadRegexpCmds"`
+	Headless           bool                    `json:"headless"`
+	KeepAppOnTop       bool                    `json:"keepAppOnTop"`
+	KioskMode          bool                    `json:"kioskMode"`
+	NoDefaultCefArgs   bool                    `json:"noDefaultCefArgs"`
+	NoToolbar          bool                    `json:"noToolbar"`
+	QuitPasswordHash   string                  `json:"quitPasswordHash"`
+	QuitUrl            string                  `json:"quitUrl"`
+	ShareContent       bool                    `json:"shareContent"`
+	StartUrls          []string                `json:"startUrls"`
+	UrlRegexpWindows   map[string]WindowConfig `json:"urlRegexpWindows"`
+	UserAgent          string                  `json:"userAgent"`
+}
+
+// WindowConfig represents window configuration for URL patterns
+type WindowConfig struct {
+	Height           int         `json:"height"`
+	Left             int         `json:"left"`
+	LoadedTimeout    int         `json:"loadedTimeout"`
+	LoadedUrlRegexps interface{} `json:"loadedUrlRegexps"`
+	LoadedUrls       interface{} `json:"loadedUrls"`
+	NoClose          bool        `json:"noClose"`
+	NoResize         bool        `json:"noResize"`
+	NoTitleBar       bool        `json:"noTitleBar"`
+	Title            string      `json:"title"`
+	Top              int         `json:"top"`
+	Width            int         `json:"width"`
+}
+
+// Global variable to track generated config file
+var generatedConfigFile string
+
+// getFreePort asks the OS for a free open port that is ready to use
+func getFreePort() (int, error) {
+	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
+	if err != nil {
+		return 0, err
+	}
+
+	l, err := net.ListenTCP("tcp", addr)
+	if err != nil {
+		return 0, err
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port, nil
+}
+
+// generateIIWConfig creates an Iceworm config file with the dynamic port
+func generateIIWConfig(port int) (string, error) {
+	// Generate unique filename
+	uniqueNumber := time.Now().UTC().Unix()
+	configFileName := fmt.Sprintf("iceworm-config-%d.json", uniqueNumber)
+
+	serverURL := fmt.Sprintf("https://127.0.0.1:%d", port)
+
+	// Create config structure
+	config := IIWConfig{
+		AllowCapture:      false,
+		AllowedUrlRegexps: []string{".*"},
+		AllowedUrls: []string{
+			serverURL,
+			"http://127.0.0.1:5173",
+			"http://localhost:5173",
+		},
+		CefArgs: map[string]string{
+			"remote-debugging-port": "9222",
+		},
+		DownloadCmdDir:     "",
+		DownloadCmds:       nil,
+		DownloadDir:        "",
+		DownloadRegexpCmds: nil,
+		Headless:           false,
+		KeepAppOnTop:       false,
+		KioskMode:          false,
+		NoDefaultCefArgs:   false,
+		NoToolbar:          false,
+		QuitPasswordHash:   "",
+		QuitUrl:            "",
+		ShareContent:       false,
+		StartUrls:          []string{serverURL},
+		UrlRegexpWindows: map[string]WindowConfig{
+			".*": {
+				Height:           1,
+				Left:             0,
+				LoadedTimeout:    0,
+				LoadedUrlRegexps: nil,
+				LoadedUrls:       nil,
+				NoClose:          false,
+				NoResize:         false,
+				NoTitleBar:       false,
+				Title:            "Iceworm Dev",
+				Top:              0,
+				Width:            1,
+			},
+		},
+		UserAgent: "IcewormDebug/1.0",
+	}
+
+	// Marshal to JSON with indentation
+	configJSON, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	// Write to file
+	if err := os.WriteFile(configFileName, configJSON, 0644); err != nil {
+		return "", fmt.Errorf("failed to write config file: %w", err)
+	}
+
+	log.Printf("Generated Iceworm config: %s", configFileName)
+	return configFileName, nil
+}
+
+// cleanupConfigFile removes the generated config file
+func cleanupConfigFile(configFile string) {
+	if configFile != "" {
+		if err := os.Remove(configFile); err != nil {
+			log.Printf("Warning: failed to remove config file %s: %v", configFile, err)
+		} else {
+			log.Printf("Cleaned up config file: %s", configFile)
+		}
+	}
+}
+
+// writePortFile writes the port number and config file path for the frontend to read
+func writePortFile(port int, configFile string) error {
+	// Write to backend directory
+	portFile := "port.txt"
+	// Format: port|config_file_path
+	content := fmt.Sprintf("%d|%s", port, configFile)
+	if err := os.WriteFile(portFile, []byte(content), 0644); err != nil {
+		return fmt.Errorf("failed to write port file: %w", err)
+	}
+
+	// Also write to frontend/public for easy access
+	frontendPortFile := filepath.Join("..", "frontend", "public", "port.txt")
+	if err := os.WriteFile(frontendPortFile, []byte(content), 0644); err != nil {
+		log.Printf("Warning: failed to write frontend port file: %v", err)
+	}
+
+	return nil
+}
+
 // enableCors sets the necessary headers for CORS
-func enableCors(w http.ResponseWriter, r *http.Request) {
+func enableCors(w http.ResponseWriter, r *http.Request, serverOrigin string) {
 	origin := r.Header.Get("Origin")
 	// Allow common local dev origins (both HTTP for dev and HTTPS for production)
 	switch origin {
 	case "http://127.0.0.1:5173", "http://localhost:5173", "http://[::1]:5173",
-		"https://127.0.0.1:9000", "https://localhost:9000":
+		serverOrigin, "https://localhost:" + serverOrigin[len("https://127.0.0.1:"):]:
 		w.Header().Set("Access-Control-Allow-Origin", origin)
 	default:
 		// For same-origin requests (embedded frontend), allow the request
 		// This is more secure than allowing "*"
 		if origin == "" {
 			// Same-origin request (no Origin header)
-			w.Header().Set("Access-Control-Allow-Origin", "https://127.0.0.1:9000")
+			w.Header().Set("Access-Control-Allow-Origin", serverOrigin)
 		}
 	}
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Timestamp, X-Signature")
@@ -50,9 +206,9 @@ func enableCors(w http.ResponseWriter, r *http.Request) {
 }
 
 // withCors wraps handlers to support CORS and preflight OPTIONS
-func withCors(handler http.HandlerFunc) http.HandlerFunc {
+func withCors(handler http.HandlerFunc, serverOrigin string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		enableCors(w, r)
+		enableCors(w, r, serverOrigin)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -127,23 +283,61 @@ func handlePing(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	// Initialize certificate manager (stores certs in user's AppData directory)
-	certManager, err := certs.NewCertificateManager()
+	// Get a free port from the OS
+	port, err := getFreePort()
 	if err != nil {
-		log.Fatal("Failed to create certificate manager:", err)
+		log.Fatal("Failed to get free port:", err)
 	}
 
-	// Ensure certificates exist (generate on first run, load on subsequent runs)
-	if err := certManager.EnsureCertificates(); err != nil {
-		log.Fatal("Failed to setup certificates:", err)
+	// Generate Iceworm config file
+	configFile, err := generateIIWConfig(port)
+	if err != nil {
+		log.Fatal("Failed to generate IIW config:", err)
+	}
+	generatedConfigFile = configFile
+
+	// Setup cleanup on exit
+	defer cleanupConfigFile(generatedConfigFile)
+
+	// Setup signal handling for graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		log.Println("Received shutdown signal...")
+		cleanupConfigFile(generatedConfigFile)
+		os.Exit(0)
+	}()
+
+	// Write port to file for frontend to read
+	if err := writePortFile(port, configFile); err != nil {
+		log.Fatal("Failed to write port file:", err)
 	}
 
-	log.Printf("Certificates stored in: %s\n", certManager.CertDir)
+	serverOrigin := fmt.Sprintf("https://127.0.0.1:%d", port)
+	serverAddr := fmt.Sprintf(":%d", port)
+
+	log.Printf("Server starting on port %d", port)
+	log.Printf("Server URL: %s", serverOrigin)
+	log.Printf("Iceworm config: %s", configFile)
 
 	// API routes
-	http.HandleFunc("/api/get", withCors(handleGet))
-	http.HandleFunc("/api/post", withCors(handlePost))
-	http.HandleFunc("/api/ping", withCors(handlePing))
+	http.HandleFunc("/api/get", withCors(handleGet, serverOrigin))
+	http.HandleFunc("/api/post", withCors(handlePost, serverOrigin))
+	http.HandleFunc("/api/ping", withCors(handlePing, serverOrigin))
+	http.HandleFunc("/api/config", withCors(func(w http.ResponseWriter, r *http.Request) {
+		response := Response{
+			Success: true,
+			Message: "Config information",
+			Data: map[string]interface{}{
+				"port":       port,
+				"configFile": configFile,
+				"serverUrl":  serverOrigin,
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}, serverOrigin))
 
 	// Serve embedded frontend files
 	distFSStripped, err := fs.Sub(distFS, "dist")
@@ -180,33 +374,5 @@ func main() {
 		http.FileServer(http.FS(distFSStripped)).ServeHTTP(w, r)
 	})
 
-	// Configure TLS with mutual authentication
-	tlsConfig := &tls.Config{
-		ClientAuth: tls.RequireAndVerifyClientCert,
-		ClientCAs:  certManager.GetCertPool(),
-		MinVersion: tls.VersionTLS13, // Use TLS 1.3 for best security
-		CipherSuites: []uint16{
-			tls.TLS_AES_128_GCM_SHA256,
-			tls.TLS_AES_256_GCM_SHA384,
-			tls.TLS_CHACHA20_POLY1305_SHA256,
-		},
-	}
-
-	// Create HTTPS server with mTLS
-	server := &http.Server{
-		Addr:      "127.0.0.1:9000", // Bind to localhost only
-		TLSConfig: tlsConfig,
-	}
-
-	log.Println("🔒 Server running with mTLS on https://127.0.0.1:9000")
-	log.Printf("📁 Certificates location: %s\n", certManager.CertDir)
-	log.Println("⚠️  Client certificate required for all connections")
-
-	// Start HTTPS server
-	if err := server.ListenAndServeTLS(
-		certManager.GetServerCertPath(),
-		certManager.GetServerKeyPath(),
-	); err != nil {
-		log.Fatal("Failed to start HTTPS server:", err)
-	}
+	log.Fatal(http.ListenAndServe(serverAddr, nil))
 }

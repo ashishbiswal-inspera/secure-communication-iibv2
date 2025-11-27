@@ -28,6 +28,10 @@ backend/dist/
 backend/*.exe
 backend/*.out
 backend/build-errors.log
+backend/port.txt
+
+# === Dynamic Iceworm Config ===
+iceworm-config-*.json
 
 # === Iceworm / local runtime (do NOT commit) ===
 # Common local locations — keep binaries & CEF resources out of the repo

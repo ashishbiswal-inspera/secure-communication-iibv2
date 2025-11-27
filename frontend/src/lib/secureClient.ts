@@ -6,7 +6,19 @@
  * In Phase 2: Will add HMAC request signing for additional security
  */
 
-const API_BASE_URL = "https://127.0.0.1:9000/api";
+// Get port and server URL directly from window.location (running in Iceworm browser)
+export function getServerInfoFromLocation(): {
+  port: number;
+  serverUrl: string;
+} {
+  const port = parseInt(window.location.port || "443", 10);
+  const serverUrl = `${window.location.protocol}//${window.location.hostname}:${port}`;
+  return { port, serverUrl };
+}
+
+// Initialize API base URL directly from window.location
+const { serverUrl } = getServerInfoFromLocation();
+const API_BASE_URL = `${serverUrl}/api`;
 
 interface RequestOptions extends RequestInit {
   timeout?: number;
