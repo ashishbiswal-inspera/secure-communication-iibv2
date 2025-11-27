@@ -103,7 +103,7 @@ class SecureApiClient {
     // Send encrypted request - backend returns EncryptedPayload directly, not wrapped
     const url = `${this.baseUrl}${endpoint}`;
     const { timeout = 10000 } = options;
-    
+
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
