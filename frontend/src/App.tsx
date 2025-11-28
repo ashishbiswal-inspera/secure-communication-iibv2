@@ -33,8 +33,7 @@ function App() {
   const handleGet = async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/get");
-      const data: ApiResponse = await res.json();
+      const data = await apiClient.get("/get");
       setResponse(data);
 
       // Clear response after 2 seconds
@@ -61,14 +60,7 @@ function App() {
         email: "john.doe@example.com",
       };
 
-      const res = await fetch("/api/post", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(requestBody),
-      });
-      const data: ApiResponse = await res.json();
+      const data = await apiClient.post("/post", requestBody);
       setResponse(data);
 
       // Clear response after 2 seconds
@@ -88,7 +80,7 @@ function App() {
   };
 
   const handleSecurePost = async () => {
-    if (!encryptionReady) {
+    if (!apiClient.isEncryptionReady()) {
       setResponse({
         success: false,
         message: "Encryption not ready",
@@ -222,7 +214,7 @@ function App() {
                 <span className="font-semibold text-slate-300">Message: </span>
                 <span className="text-white">{response.message}</span>
               </div>
-              {response.data && (
+              {response.data ? (
                 <div>
                   <span className="font-semibold text-slate-300 block mb-2">
                     Data:
@@ -231,7 +223,7 @@ function App() {
                     {JSON.stringify(response.data, null, 2)}
                   </pre>
                 </div>
-              )}
+              ) : null}
             </div>
           </div>
         )}

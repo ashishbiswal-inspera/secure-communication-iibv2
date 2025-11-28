@@ -8,7 +8,7 @@ import axios, {
   type AxiosRequestConfig,
   type AxiosResponse,
 } from "axios";
-import { encryptionManager, type EncryptedPayload } from "../crypto/encryption";
+import { encryptionManager, type EncryptedPayload } from "../encryption";
 
 export interface RequestConfig extends AxiosRequestConfig {
   encrypted?: boolean; // Flag to enable encryption for this request

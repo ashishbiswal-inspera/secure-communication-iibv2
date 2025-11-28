@@ -5,7 +5,7 @@
  */
 
 import { httpClient, getServerInfo } from "./http/axiosInterceptor";
-import { encryptionManager, EncryptionManager } from "./crypto/encryption";
+import { encryptionManager, EncryptionManager } from "./encryption";
 import type { ApiResponse } from "./http/axiosInterceptor";
 
 export { getServerInfo };
