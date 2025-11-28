@@ -22,6 +22,10 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
 )
 
 //go:embed dist
@@ -569,46 +573,68 @@ func main() {
 		os.Exit(0)
 	}()
 
-	serverOrigin := fmt.Sprintf("https://127.0.0.1:%d", port)
+	serverOrigin := fmt.Sprintf("http://127.0.0.1:%d", port)
 	serverAddr := fmt.Sprintf(":%d", port)
 
 	log.Printf("Server starting on port %d", port)
 	log.Printf("Server URL: %s", serverOrigin)
 	log.Printf("Iceworm config: %s", configFile)
 
+	// Create chi router
+	r := chi.NewRouter()
+
+	// Middleware
+	r.Use(middleware.Logger)
+	r.Use(middleware.Recoverer)
+	r.Use(middleware.RequestID)
+	r.Use(middleware.RealIP)
+
+	// CORS middleware
+	r.Use(cors.Handler(cors.Options{
+		AllowedOrigins:   []string{serverOrigin, "http://127.0.0.1:5173", "http://localhost:5173"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
+		ExposedHeaders:   []string{"Link"},
+		AllowCredentials: true,
+		MaxAge:           300,
+	}))
+
 	// API routes
-	http.HandleFunc("/api/get", withCors(handleGet, serverOrigin))
-	http.HandleFunc("/api/post", withCors(handlePost, serverOrigin))
-	http.HandleFunc("/api/ping", withCors(handlePing, serverOrigin))
-	http.HandleFunc("/api/config", withCors(func(w http.ResponseWriter, r *http.Request) {
-		response := Response{
-			Success: true,
-			Message: "Config information",
-			Data: map[string]interface{}{
-				"port":       port,
-				"configFile": configFile,
-				"serverUrl":  serverOrigin,
-			},
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
-	}, serverOrigin))
+	r.Route("/api", func(r chi.Router) {
+		r.Get("/get", handleGet)
+		r.Post("/post", handlePost)
+		r.Get("/ping", handlePing)
 
-	// Security key endpoint - provides encryption key to frontend
-	http.HandleFunc("/api/security/key", withCors(func(w http.ResponseWriter, r *http.Request) {
-		response := Response{
-			Success: true,
-			Message: "Encryption key",
-			Data: map[string]interface{}{
-				"key": securityMgr.GetKeyHex(),
-			},
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
-	}, serverOrigin))
+		r.Get("/config", func(w http.ResponseWriter, r *http.Request) {
+			response := Response{
+				Success: true,
+				Message: "Config information",
+				Data: map[string]interface{}{
+					"port":       port,
+					"configFile": configFile,
+					"serverUrl":  serverOrigin,
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(response)
+		})
 
-	// Secure POST endpoint with encryption and replay protection
-	http.HandleFunc("/api/secure/post", withCors(handleSecurePost, serverOrigin))
+		// Security endpoints
+		r.Get("/security/key", func(w http.ResponseWriter, r *http.Request) {
+			response := Response{
+				Success: true,
+				Message: "Encryption key",
+				Data: map[string]interface{}{
+					"key": securityMgr.GetKeyHex(),
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(response)
+		})
+
+		// Secure POST endpoint with encryption and replay protection
+		r.Post("/secure/post", handleSecurePost)
+	})
 
 	// Serve embedded frontend files
 	distFSStripped, err := fs.Sub(distFS, "dist")
@@ -616,39 +642,27 @@ func main() {
 		log.Fatal("Failed to access embedded dist folder:", err)
 	}
 
-	// Handle all non-API routes by serving the React app
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// If the path starts with /api, it will be handled by the API handlers above
-		if strings.HasPrefix(r.URL.Path, "/api/") {
-			http.NotFound(w, r)
-			return
-		}
-
-		// Try to open the file from embedded FS
-		path := strings.TrimPrefix(r.URL.Path, "/")
+	// Static file server for React app
+	fileServer := http.FileServer(http.FS(distFSStripped))
+	r.Get("/*", func(w http.ResponseWriter, req *http.Request) {
+		path := strings.TrimPrefix(req.URL.Path, "/")
 		if path == "" {
 			path = "index.html"
 		}
 
-		file, err := distFSStripped.Open(path)
-		if err != nil {
+		// Try to open the file
+		if _, err := distFSStripped.Open(path); err != nil {
 			// If file not found, serve index.html for client-side routing
-			file, err = distFSStripped.Open("index.html")
-			if err != nil {
-				http.Error(w, "Could not open index.html", http.StatusInternalServerError)
-				return
-			}
+			req.URL.Path = "/"
 		}
-		defer file.Close()
 
-		// Serve the file
-		http.FileServer(http.FS(distFSStripped)).ServeHTTP(w, r)
+		fileServer.ServeHTTP(w, req)
 	})
 
 	// Start server in a goroutine
 	go func() {
-		log.Printf("Starting HTTP server on %s", serverAddr)
-		if err := http.ListenAndServe(serverAddr, nil); err != nil {
+		log.Printf("Starting HTTP server on %s with Chi router", serverAddr)
+		if err := http.ListenAndServe(serverAddr, r); err != nil {
 			log.Fatal("Server failed:", err)
 		}
 	}()

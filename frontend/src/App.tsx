@@ -1,23 +1,21 @@
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { getServerInfoFromLocation, apiClient } from "@/lib/secureClient";
+import {
+  apiClient,
+  getServerInfo,
+  type ApiResponse,
+} from "@/lib/apiClientAxios";
 
 interface ApiRequest {
   name: string;
   email: string;
 }
 
-interface ApiResponse {
-  success: boolean;
-  message: string;
-  data?: ApiRequest;
-}
-
 function App() {
   const [response, setResponse] = useState<ApiResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [encryptionReady, setEncryptionReady] = useState(false);
-  const { port, serverUrl } = getServerInfoFromLocation();
+  const { port, serverUrl } = getServerInfo();
 
   // Initialize encryption on mount
   useEffect(() => {

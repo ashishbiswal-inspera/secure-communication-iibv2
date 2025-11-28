@@ -12,7 +12,7 @@ import {
   encryptionManager,
   EncryptionManager,
   type EncryptedPayload,
-} from "./encryption";
+} from "./crypto/encryption";
 
 // Get port and server URL directly from window.location (running in Iceworm browser)
 export function getServerInfoFromLocation(): {
