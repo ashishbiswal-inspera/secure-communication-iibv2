@@ -1,5 +1,4 @@
 - Benchmarking of encryption and decryption functions
-- Added option to disable proxy server in Iceworm config
 - encrypt GET also
 - Websequence diagram for encryption flow
 - Refactored encryption code into a separate module
