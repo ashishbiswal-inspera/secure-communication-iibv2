@@ -1,15 +1,11 @@
 package main
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
+	constants "backend/pkg/const"
+	"backend/pkg/encryption"
 	"embed"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/fs"
 	"log"
 	"net"
@@ -19,7 +15,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -42,28 +37,6 @@ type Response struct {
 type RequestData struct {
 	Name  string `json:"name"`
 	Email string `json:"email"`
-}
-
-// EncryptedPayload represents an encrypted request/response
-type EncryptedPayload struct {
-	Ciphertext string `json:"ciphertext"` // Base64 encoded
-	Nonce      string `json:"nonce"`      // Base64 encoded GCM nonce
-}
-
-// SecureRequest represents decrypted request with timestamp and nonce for replay protection
-type SecureRequest struct {
-	Timestamp int64       `json:"timestamp"` // Unix timestamp in milliseconds
-	Nonce     string      `json:"nonce"`     // Unique request identifier
-	Payload   interface{} `json:"payload"`   // Actual request data
-}
-
-// SecurityManager handles encryption keys and nonce tracking
-type SecurityManager struct {
-	aesKey       []byte
-	gcm          cipher.AEAD
-	seenNonces   map[string]time.Time
-	nonceMutex   sync.RWMutex
-	nonceTimeout time.Duration
 }
 
 // IIWConfig represents the Iceworm browser configuration
@@ -105,125 +78,14 @@ type WindowConfig struct {
 	Width            int         `json:"width"`
 }
 
+const (
+	contentTypeKey  = "Content-Type"
+	jsonContentType = "application/json"
+)
+
 // Global variables
 var generatedConfigFile string
-var securityMgr *SecurityManager
-
-// NewSecurityManager creates a new security manager with AES-GCM encryption
-func NewSecurityManager() (*SecurityManager, error) {
-	// Generate random 32-byte AES-256 key
-	key := make([]byte, 32)
-	if _, err := io.ReadFull(rand.Reader, key); err != nil {
-		return nil, fmt.Errorf("failed to generate AES key: %w", err)
-	}
-
-	// Create AES cipher
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create AES cipher: %w", err)
-	}
-
-	// Create GCM mode
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create GCM: %w", err)
-	}
-
-	sm := &SecurityManager{
-		aesKey:       key,
-		gcm:          gcm,
-		seenNonces:   make(map[string]time.Time),
-		nonceTimeout: 5 * time.Second,
-	}
-
-	// Start nonce cleanup goroutine
-	go sm.cleanupExpiredNonces()
-
-	return sm, nil
-}
-
-// GetKeyHex returns the AES key as hex string for passing to frontend
-func (sm *SecurityManager) GetKeyHex() string {
-	return hex.EncodeToString(sm.aesKey)
-}
-
-// Encrypt encrypts data using AES-GCM
-func (sm *SecurityManager) Encrypt(plaintext []byte) (*EncryptedPayload, error) {
-	// Generate random nonce
-	nonce := make([]byte, sm.gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return nil, fmt.Errorf("failed to generate nonce: %w", err)
-	}
-
-	// Encrypt
-	ciphertext := sm.gcm.Seal(nil, nonce, plaintext, nil)
-
-	return &EncryptedPayload{
-		Ciphertext: base64.StdEncoding.EncodeToString(ciphertext),
-		Nonce:      base64.StdEncoding.EncodeToString(nonce),
-	}, nil
-}
-
-// Decrypt decrypts data using AES-GCM
-func (sm *SecurityManager) Decrypt(payload *EncryptedPayload) ([]byte, error) {
-	// Decode base64
-	ciphertext, err := base64.StdEncoding.DecodeString(payload.Ciphertext)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode ciphertext: %w", err)
-	}
-
-	nonce, err := base64.StdEncoding.DecodeString(payload.Nonce)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode nonce: %w", err)
-	}
-
-	// Decrypt
-	plaintext, err := sm.gcm.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return nil, fmt.Errorf("decryption failed: %w", err)
-	}
-
-	return plaintext, nil
-}
-
-// ValidateAndTrackNonce checks timestamp and prevents replay attacks
-func (sm *SecurityManager) ValidateAndTrackNonce(secureReq *SecureRequest) error {
-	// Check timestamp (within 5 seconds)
-	now := time.Now().UnixMilli()
-	timeDiff := now - secureReq.Timestamp
-	if timeDiff < 0 || timeDiff > 5000 {
-		return fmt.Errorf("request timestamp expired or invalid (diff: %dms)", timeDiff)
-	}
-
-	// Check if nonce was already used
-	sm.nonceMutex.Lock()
-	defer sm.nonceMutex.Unlock()
-
-	if _, exists := sm.seenNonces[secureReq.Nonce]; exists {
-		return fmt.Errorf("nonce already used (replay attack detected)")
-	}
-
-	// Track this nonce
-	sm.seenNonces[secureReq.Nonce] = time.Now()
-	return nil
-}
-
-// cleanupExpiredNonces periodically removes old nonces to prevent memory leak
-func (sm *SecurityManager) cleanupExpiredNonces() {
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		sm.nonceMutex.Lock()
-		cutoff := time.Now().Add(-sm.nonceTimeout)
-		for nonce, timestamp := range sm.seenNonces {
-			if timestamp.Before(cutoff) {
-				delete(sm.seenNonces, nonce)
-			}
-		}
-		sm.nonceMutex.Unlock()
-	}
-}
+var securityMgr *encryption.Manager
 
 // getFreePort asks the OS for a free open port that is ready to use
 func getFreePort() (int, error) {
@@ -254,7 +116,7 @@ func generateIIWConfig(port int) (string, error) {
 		AllowedUrlRegexps: []string{".*"},
 		AllowedUrls: []string{
 			serverURL,
-			"http://127.0.0.1:5173",
+			constants.DEFAULT_VITE_URL,
 			"http://localhost:5173",
 		},
 		CefArgs: map[string]string{
@@ -370,39 +232,6 @@ func watchIcewormProcess(cmd *exec.Cmd, configFile string) {
 	os.Exit(0)
 }
 
-// enableCors sets the necessary headers for CORS
-func enableCors(w http.ResponseWriter, r *http.Request, serverOrigin string) {
-	origin := r.Header.Get("Origin")
-	// Allow common local dev origins (both HTTP for dev and HTTPS for production)
-	switch origin {
-	case "http://127.0.0.1:5173", "http://localhost:5173", "http://[::1]:5173",
-		serverOrigin, "https://localhost:" + serverOrigin[len("https://127.0.0.1:"):]:
-		w.Header().Set("Access-Control-Allow-Origin", origin)
-	default:
-		// For same-origin requests (embedded frontend), allow the request
-		// This is more secure than allowing "*"
-		if origin == "" {
-			// Same-origin request (no Origin header)
-			w.Header().Set("Access-Control-Allow-Origin", serverOrigin)
-		}
-	}
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Timestamp, X-Signature")
-	w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Credentials", "true")
-}
-
-// withCors wraps handlers to support CORS and preflight OPTIONS
-func withCors(handler http.HandlerFunc, serverOrigin string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		enableCors(w, r, serverOrigin)
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		handler(w, r)
-	}
-}
-
 // handleGet is a simple GET endpoint that sends JSON
 func handleGet(w http.ResponseWriter, r *http.Request) {
 	response := Response{
@@ -414,7 +243,7 @@ func handleGet(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(contentTypeKey, jsonContentType)
 	json.NewEncoder(w).Encode(response)
 }
 
@@ -425,7 +254,7 @@ func handlePost(w http.ResponseWriter, r *http.Request) {
 			Success: false,
 			Message: "Method not allowed",
 		}
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(contentTypeKey, jsonContentType)
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		json.NewEncoder(w).Encode(response)
 		return
@@ -439,7 +268,7 @@ func handlePost(w http.ResponseWriter, r *http.Request) {
 			Success: false,
 			Message: "Invalid JSON data",
 		}
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(contentTypeKey, jsonContentType)
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(response)
 		return
@@ -453,7 +282,7 @@ func handlePost(w http.ResponseWriter, r *http.Request) {
 		Data:    requestData,
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(contentTypeKey, jsonContentType)
 	json.NewEncoder(w).Encode(response)
 }
 
@@ -464,7 +293,7 @@ func handlePing(w http.ResponseWriter, r *http.Request) {
 		Message: "pong pong",
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(contentTypeKey, jsonContentType)
 	json.NewEncoder(w).Encode(response)
 }
 
@@ -476,7 +305,7 @@ func handleSecurePost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Decode encrypted payload
-	var encryptedPayload EncryptedPayload
+	var encryptedPayload encryption.EncryptedPayload
 	if err := json.NewDecoder(r.Body).Decode(&encryptedPayload); err != nil {
 		log.Printf("Failed to decode encrypted payload: %v", err)
 		http.Error(w, "Invalid encrypted payload", http.StatusBadRequest)
@@ -492,7 +321,7 @@ func handleSecurePost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Decode secure request (with timestamp and nonce)
-	var secureReq SecureRequest
+	var secureReq encryption.SecureRequest
 	if err := json.Unmarshal(plaintext, &secureReq); err != nil {
 		log.Printf("Failed to unmarshal secure request: %v", err)
 		http.Error(w, "Invalid request format", http.StatusBadRequest)
@@ -533,14 +362,14 @@ func handleSecurePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(contentTypeKey, jsonContentType)
 	json.NewEncoder(w).Encode(encryptedResponse)
 }
 
 func main() {
 	// Initialize security manager with AES-GCM encryption
 	var err error
-	securityMgr, err = NewSecurityManager()
+	securityMgr, err = encryption.NewManager()
 	if err != nil {
 		log.Fatal("Failed to initialize security manager:", err)
 	}
@@ -591,9 +420,9 @@ func main() {
 
 	// CORS middleware
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{serverOrigin, "http://127.0.0.1:5173", "http://localhost:5173"},
+		AllowedOrigins:   []string{serverOrigin, constants.DEFAULT_VITE_URL, "http://localhost:5173"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
+		AllowedHeaders:   []string{"Accept", "Authorization", contentTypeKey, "X-CSRF-Token"},
 		ExposedHeaders:   []string{"Link"},
 		AllowCredentials: true,
 		MaxAge:           300,
@@ -615,7 +444,7 @@ func main() {
 					"serverUrl":  serverOrigin,
 				},
 			}
-			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set(contentTypeKey, jsonContentType)
 			json.NewEncoder(w).Encode(response)
 		})
 
@@ -628,7 +457,7 @@ func main() {
 					"key": securityMgr.GetKeyHex(),
 				},
 			}
-			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set(contentTypeKey, jsonContentType)
 			json.NewEncoder(w).Encode(response)
 		})
 
