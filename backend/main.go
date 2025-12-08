@@ -297,44 +297,121 @@ func handlePing(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-// handleSecureGet handles encrypted GET requests with replay protection
-// Uses POST method with encrypted body since GET doesn't support request body
-func handleSecureGet(w http.ResponseWriter, r *http.Request) {
-	// Decode encrypted payload from request body
-	var encryptedPayload encryption.EncryptedPayload
-	if err := json.NewDecoder(r.Body).Decode(&encryptedPayload); err != nil {
-		log.Printf("Failed to decode encrypted payload: %v", err)
-		http.Error(w, "Invalid encrypted payload", http.StatusBadRequest)
-		return
+// SecureContext holds decrypted request data passed to secure handlers
+type SecureContext struct {
+	Payload   interface{}
+	Nonce     string
+	Timestamp int64
+}
+
+// SecureHandler is a handler function that receives decrypted payload and returns response
+type SecureHandler func(ctx *SecureContext) (interface{}, error)
+
+// withSecure is a decorator/middleware that wraps any handler with encryption/decryption
+// It handles: decryption, nonce validation, timestamp check, and response encryption
+func withSecure(handler SecureHandler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Decode encrypted payload from request body
+		var encryptedPayload encryption.EncryptedPayload
+		if err := json.NewDecoder(r.Body).Decode(&encryptedPayload); err != nil {
+			log.Printf("Failed to decode encrypted payload: %v", err)
+			sendSecureError(w, "Invalid encrypted payload", http.StatusBadRequest)
+			return
+		}
+
+		// Decrypt payload
+		plaintext, err := securityMgr.Decrypt(&encryptedPayload)
+		if err != nil {
+			log.Printf("Decryption failed: %v", err)
+			sendSecureError(w, "Decryption failed", http.StatusUnauthorized)
+			return
+		}
+
+		// Decode secure request (with timestamp and nonce)
+		var secureReq encryption.SecureRequest
+		if err := json.Unmarshal(plaintext, &secureReq); err != nil {
+			log.Printf("Failed to unmarshal secure request: %v", err)
+			sendSecureError(w, "Invalid request format", http.StatusBadRequest)
+			return
+		}
+
+		// Validate timestamp and check for replay attacks
+		if err := securityMgr.ValidateAndTrackNonce(&secureReq); err != nil {
+			log.Printf("Security validation failed: %v", err)
+			sendSecureError(w, "Security validation failed", http.StatusForbidden)
+			return
+		}
+
+		log.Printf("Secure request received (nonce: %s, timestamp: %d)", secureReq.Nonce, secureReq.Timestamp)
+
+		// Create secure context for the handler
+		ctx := &SecureContext{
+			Payload:   secureReq.Payload,
+			Nonce:     secureReq.Nonce,
+			Timestamp: secureReq.Timestamp,
+		}
+
+		// Call the actual handler
+		response, err := handler(ctx)
+		if err != nil {
+			log.Printf("Handler error: %v", err)
+			sendSecureError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// Encrypt response
+		responseBytes, _ := json.Marshal(response)
+		encryptedResponse, err := securityMgr.Encrypt(responseBytes)
+		if err != nil {
+			log.Printf("Failed to encrypt response: %v", err)
+			sendSecureError(w, "Encryption failed", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set(contentTypeKey, jsonContentType)
+		json.NewEncoder(w).Encode(encryptedResponse)
 	}
+}
 
-	// Decrypt payload
-	plaintext, err := securityMgr.Decrypt(&encryptedPayload)
-	if err != nil {
-		log.Printf("Decryption failed: %v", err)
-		http.Error(w, "Decryption failed", http.StatusUnauthorized)
-		return
-	}
-
-	// Decode secure request (with timestamp and nonce)
-	var secureReq encryption.SecureRequest
-	if err := json.Unmarshal(plaintext, &secureReq); err != nil {
-		log.Printf("Failed to unmarshal secure request: %v", err)
-		http.Error(w, "Invalid request format", http.StatusBadRequest)
-		return
-	}
-
-	// Validate timestamp and check for replay attacks
-	if err := securityMgr.ValidateAndTrackNonce(&secureReq); err != nil {
-		log.Printf("Security validation failed: %v", err)
-		http.Error(w, "Security validation failed", http.StatusForbidden)
-		return
-	}
-
-	log.Printf("Secure GET request received (nonce: %s, timestamp: %d)", secureReq.Nonce, secureReq.Timestamp)
-
-	// Return data (similar to handleGet but encrypted)
+// sendSecureError sends an encrypted error response
+func sendSecureError(w http.ResponseWriter, message string, statusCode int) {
 	response := Response{
+		Success: false,
+		Message: message,
+	}
+
+	// Try to encrypt the error response
+	responseBytes, _ := json.Marshal(response)
+	encryptedResponse, err := securityMgr.Encrypt(responseBytes)
+	if err != nil {
+		// If encryption fails, send plain error
+		http.Error(w, message, statusCode)
+		return
+	}
+
+	w.Header().Set(contentTypeKey, jsonContentType)
+	w.WriteHeader(statusCode)
+	json.NewEncoder(w).Encode(encryptedResponse)
+}
+
+// Helper to decode payload into a specific type
+func decodePayload[T any](ctx *SecureContext) (T, error) {
+	var result T
+	payloadBytes, err := json.Marshal(ctx.Payload)
+	if err != nil {
+		return result, fmt.Errorf("failed to marshal payload: %w", err)
+	}
+	if err := json.Unmarshal(payloadBytes, &result); err != nil {
+		return result, fmt.Errorf("failed to unmarshal payload: %w", err)
+	}
+	return result, nil
+}
+
+// ============ Secure Handlers (use with withSecure decorator) ============
+
+// secureGetHandler - secure version of GET
+func secureGetHandler(ctx *SecureContext) (interface{}, error) {
+	return Response{
 		Success: true,
 		Message: "Secure GET request successful",
 		Data: map[string]interface{}{
@@ -342,88 +419,23 @@ func handleSecureGet(w http.ResponseWriter, r *http.Request) {
 			"status":    "running",
 			"secure":    true,
 		},
-	}
-
-	// Encrypt response
-	responseBytes, _ := json.Marshal(response)
-	encryptedResponse, err := securityMgr.Encrypt(responseBytes)
-	if err != nil {
-		log.Printf("Failed to encrypt response: %v", err)
-		http.Error(w, "Encryption failed", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set(contentTypeKey, jsonContentType)
-	json.NewEncoder(w).Encode(encryptedResponse)
+	}, nil
 }
 
-// handleSecurePost handles encrypted POST requests with replay protection
-func handleSecurePost(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	// Decode encrypted payload
-	var encryptedPayload encryption.EncryptedPayload
-	if err := json.NewDecoder(r.Body).Decode(&encryptedPayload); err != nil {
-		log.Printf("Failed to decode encrypted payload: %v", err)
-		http.Error(w, "Invalid encrypted payload", http.StatusBadRequest)
-		return
-	}
-
-	// Decrypt payload
-	plaintext, err := securityMgr.Decrypt(&encryptedPayload)
+// securePostHandler - secure version of POST
+func securePostHandler(ctx *SecureContext) (interface{}, error) {
+	requestData, err := decodePayload[RequestData](ctx)
 	if err != nil {
-		log.Printf("Decryption failed: %v", err)
-		http.Error(w, "Decryption failed", http.StatusUnauthorized)
-		return
+		return nil, fmt.Errorf("invalid payload format: %w", err)
 	}
 
-	// Decode secure request (with timestamp and nonce)
-	var secureReq encryption.SecureRequest
-	if err := json.Unmarshal(plaintext, &secureReq); err != nil {
-		log.Printf("Failed to unmarshal secure request: %v", err)
-		http.Error(w, "Invalid request format", http.StatusBadRequest)
-		return
-	}
+	log.Printf("Secure POST data: %+v", requestData)
 
-	// Validate timestamp and check for replay attacks
-	if err := securityMgr.ValidateAndTrackNonce(&secureReq); err != nil {
-		log.Printf("Security validation failed: %v", err)
-		http.Error(w, "Security validation failed", http.StatusForbidden)
-		return
-	}
-
-	// Extract actual payload
-	var requestData RequestData
-	payloadBytes, _ := json.Marshal(secureReq.Payload)
-	if err := json.Unmarshal(payloadBytes, &requestData); err != nil {
-		log.Printf("Failed to unmarshal payload: %v", err)
-		http.Error(w, "Invalid payload format", http.StatusBadRequest)
-		return
-	}
-
-	log.Printf("Secure request received: %+v (nonce: %s, timestamp: %d)", requestData, secureReq.Nonce, secureReq.Timestamp)
-
-	// Process request
-	response := Response{
+	return Response{
 		Success: true,
 		Message: "Secure data received successfully",
 		Data:    requestData,
-	}
-
-	// Encrypt response
-	responseBytes, _ := json.Marshal(response)
-	encryptedResponse, err := securityMgr.Encrypt(responseBytes)
-	if err != nil {
-		log.Printf("Failed to encrypt response: %v", err)
-		http.Error(w, "Encryption failed", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set(contentTypeKey, jsonContentType)
-	json.NewEncoder(w).Encode(encryptedResponse)
+	}, nil
 }
 
 func main() {
@@ -521,12 +533,10 @@ func main() {
 			json.NewEncoder(w).Encode(response)
 		})
 
-		// Secure POST endpoint with encryption and replay protection
-		r.Post("/secure/post", handleSecurePost)
-
-		// Secure GET endpoint with encryption and replay protection
-		// Uses POST method since GET doesn't support request body
-		r.Post("/secure/get", handleSecureGet)
+		// Secure endpoints using withSecure decorator
+		// All secure endpoints use POST method since encrypted requests need a body
+		r.Post("/secure/post", withSecure(securePostHandler))
+		r.Post("/secure/get", withSecure(secureGetHandler))
 	})
 
 	// Serve embedded frontend files
