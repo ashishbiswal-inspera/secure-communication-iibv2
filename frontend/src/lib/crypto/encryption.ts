@@ -116,20 +116,6 @@ export class EncryptionManager {
     return JSON.parse(json);
   }
 
-  /**
-   * Fetch encryption key from backend
-   */
-  static async fetchKeyFromBackend(serverUrl: string): Promise<string> {
-    const response = await fetch(`${serverUrl}/api/security/key`);
-    const data = await response.json();
-
-    if (!data.success || !data.data?.key) {
-      throw new Error("Failed to fetch encryption key");
-    }
-
-    return data.data.key;
-  }
-
   // Helper: Convert hex string to Uint8Array
   private hexToBytes(hex: string): Uint8Array {
     const bytes = new Uint8Array(hex.length / 2);

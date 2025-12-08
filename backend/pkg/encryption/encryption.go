@@ -34,12 +34,25 @@ type Manager struct {
 	nonceTimeout time.Duration
 }
 
-// NewManager creates a new security manager with AES-GCM encryption
+// NewManager creates a new security manager with AES-GCM encryption using random key
 func NewManager() (*Manager, error) {
 	// Generate random 32-byte AES-256 key
 	key := make([]byte, 32)
 	if _, err := io.ReadFull(rand.Reader, key); err != nil {
 		return nil, fmt.Errorf("failed to generate AES key: %w", err)
+	}
+	return NewManagerWithKey(hex.EncodeToString(key))
+}
+
+// NewManagerWithKey creates a security manager with a pre-shared key (hex encoded)
+func NewManagerWithKey(keyHex string) (*Manager, error) {
+	// Decode hex key
+	key, err := hex.DecodeString(keyHex)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode key: %w", err)
+	}
+	if len(key) != 32 {
+		return nil, fmt.Errorf("invalid key length: expected 32 bytes, got %d", len(key))
 	}
 
 	// Create AES cipher

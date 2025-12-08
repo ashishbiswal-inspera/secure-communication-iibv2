@@ -3,6 +3,12 @@
  * Implements AES-256-GCM encryption with replay protection
  */
 
+// Pre-shared encryption key (must match backend)
+// In production, this should be injected at build time via environment variable
+const PRE_SHARED_KEY =
+  import.meta.env.VITE_ENCRYPTION_KEY ||
+  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
 // Encrypted payload structure matching backend
 interface EncryptedPayload {
   ciphertext: string; // Base64 encoded
@@ -117,17 +123,11 @@ export class EncryptionManager {
   }
 
   /**
-   * Fetch encryption key from backend
+   * Get the pre-shared encryption key
+   * No longer fetches from backend to prevent MITM attacks
    */
-  static async fetchKeyFromBackend(serverUrl: string): Promise<string> {
-    const response = await fetch(`${serverUrl}/api/security/key`);
-    const data = await response.json();
-
-    if (!data.success || !data.data?.key) {
-      throw new Error("Failed to fetch encryption key");
-    }
-
-    return data.data.key;
+  static getPreSharedKey(): string {
+    return PRE_SHARED_KEY;
   }
 
   // Helper: Convert hex string to Uint8Array

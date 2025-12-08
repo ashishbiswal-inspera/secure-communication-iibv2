@@ -439,14 +439,13 @@ func securePostHandler(ctx *SecureContext) (interface{}, error) {
 }
 
 func main() {
-	// Initialize security manager with AES-GCM encryption
+	// Initialize security manager with pre-shared key
 	var err error
-	securityMgr, err = encryption.NewManager()
+	securityMgr, err = encryption.NewManagerWithKey(constants.GetEncryptionKey())
 	if err != nil {
 		log.Fatal("Failed to initialize security manager:", err)
 	}
-	log.Printf("Security initialized with AES-256-GCM encryption")
-	log.Printf("Encryption key (hex): %s", securityMgr.GetKeyHex())
+	log.Printf("Security initialized with AES-256-GCM encryption (pre-shared key)")
 
 	// Get a free port from the OS
 	port, err := getFreePort()
@@ -514,19 +513,6 @@ func main() {
 					"port":       port,
 					"configFile": configFile,
 					"serverUrl":  serverOrigin,
-				},
-			}
-			w.Header().Set(contentTypeKey, jsonContentType)
-			json.NewEncoder(w).Encode(response)
-		})
-
-		// Security endpoints
-		r.Get("/security/key", func(w http.ResponseWriter, r *http.Request) {
-			response := Response{
-				Success: true,
-				Message: "Encryption key",
-				Data: map[string]interface{}{
-					"key": securityMgr.GetKeyHex(),
 				},
 			}
 			w.Header().Set(contentTypeKey, jsonContentType)

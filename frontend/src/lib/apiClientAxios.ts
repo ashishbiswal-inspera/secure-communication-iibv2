@@ -16,13 +16,12 @@ export type { ApiResponse };
  */
 class ApiClient {
   /**
-   * Initialize encryption with key from backend
+   * Initialize encryption with pre-shared key (no network call needed)
    */
   async initializeEncryption(): Promise<void> {
-    const { serverUrl } = getServerInfo();
-    const key = await EncryptionManager.fetchKeyFromBackend(serverUrl);
+    const key = EncryptionManager.getPreSharedKey();
     await encryptionManager.initialize(key);
-    console.log("✅ End-to-end encryption enabled (Axios)");
+    console.log("✅ End-to-end encryption enabled with pre-shared key");
   }
 
   /**
