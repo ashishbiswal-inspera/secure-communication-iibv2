@@ -117,6 +117,36 @@ function App() {
     }
   };
 
+  const handleSecureGet = async () => {
+    if (!apiClient.isEncryptionReady()) {
+      setResponse({
+        success: false,
+        message: "Encryption not ready",
+      });
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const data = await apiClient.secureGet("/get");
+      setResponse(data);
+
+      // Clear response after 2 seconds
+      setTimeout(() => {
+        setResponse(null);
+      }, 2000);
+    } catch (error) {
+      console.error("Secure GET request failed:", error);
+      setResponse({
+        success: false,
+        message: "Secure GET request failed",
+      });
+      setTimeout(() => setResponse(null), 2000);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-purple-900 to-slate-950 flex items-center justify-center p-8">
       <div className="max-w-2xl w-full space-y-8">
@@ -177,6 +207,16 @@ function App() {
             className="bg-purple-600 hover:bg-purple-700 text-white"
           >
             🔒 Secure POST (Encrypted)
+          </Button>
+
+          <Button
+            onClick={handleSecureGet}
+            disabled={loading || !encryptionReady}
+            variant="default"
+            size="lg"
+            className="bg-cyan-600 hover:bg-cyan-700 text-white"
+          >
+            🔒 Secure GET (Encrypted)
           </Button>
         </div>
 

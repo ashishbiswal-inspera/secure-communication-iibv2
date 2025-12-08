@@ -85,9 +85,13 @@ class ApiClient {
 
   /**
    * GET request with encryption
+   * Note: Uses POST method internally since encrypted requests require a body
+   * The backend endpoint /api/secure/get handles this
    */
   async secureGet<T = unknown>(endpoint: string): Promise<ApiResponse<T>> {
-    return httpClient.get<T>(endpoint, { encrypted: true });
+    // Secure GET uses POST method with encrypted body
+    // Send empty object as payload - backend will return data
+    return httpClient.post<T>(`/secure/get`, { endpoint }, { encrypted: true });
   }
 
   /**

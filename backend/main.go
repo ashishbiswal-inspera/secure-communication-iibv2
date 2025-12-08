@@ -297,6 +297,66 @@ func handlePing(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
+// handleSecureGet handles encrypted GET requests with replay protection
+// Uses POST method with encrypted body since GET doesn't support request body
+func handleSecureGet(w http.ResponseWriter, r *http.Request) {
+	// Decode encrypted payload from request body
+	var encryptedPayload encryption.EncryptedPayload
+	if err := json.NewDecoder(r.Body).Decode(&encryptedPayload); err != nil {
+		log.Printf("Failed to decode encrypted payload: %v", err)
+		http.Error(w, "Invalid encrypted payload", http.StatusBadRequest)
+		return
+	}
+
+	// Decrypt payload
+	plaintext, err := securityMgr.Decrypt(&encryptedPayload)
+	if err != nil {
+		log.Printf("Decryption failed: %v", err)
+		http.Error(w, "Decryption failed", http.StatusUnauthorized)
+		return
+	}
+
+	// Decode secure request (with timestamp and nonce)
+	var secureReq encryption.SecureRequest
+	if err := json.Unmarshal(plaintext, &secureReq); err != nil {
+		log.Printf("Failed to unmarshal secure request: %v", err)
+		http.Error(w, "Invalid request format", http.StatusBadRequest)
+		return
+	}
+
+	// Validate timestamp and check for replay attacks
+	if err := securityMgr.ValidateAndTrackNonce(&secureReq); err != nil {
+		log.Printf("Security validation failed: %v", err)
+		http.Error(w, "Security validation failed", http.StatusForbidden)
+		return
+	}
+
+	log.Printf("Secure GET request received (nonce: %s, timestamp: %d)", secureReq.Nonce, secureReq.Timestamp)
+
+	// Return data (similar to handleGet but encrypted)
+	response := Response{
+		Success: true,
+		Message: "Secure GET request successful",
+		Data: map[string]interface{}{
+			"timestamp": "2025-11-05",
+			"status":    "running",
+			"secure":    true,
+		},
+	}
+
+	// Encrypt response
+	responseBytes, _ := json.Marshal(response)
+	encryptedResponse, err := securityMgr.Encrypt(responseBytes)
+	if err != nil {
+		log.Printf("Failed to encrypt response: %v", err)
+		http.Error(w, "Encryption failed", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set(contentTypeKey, jsonContentType)
+	json.NewEncoder(w).Encode(encryptedResponse)
+}
+
 // handleSecurePost handles encrypted POST requests with replay protection
 func handleSecurePost(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -463,6 +523,10 @@ func main() {
 
 		// Secure POST endpoint with encryption and replay protection
 		r.Post("/secure/post", handleSecurePost)
+
+		// Secure GET endpoint with encryption and replay protection
+		// Uses POST method since GET doesn't support request body
+		r.Post("/secure/get", handleSecureGet)
 	})
 
 	// Serve embedded frontend files
