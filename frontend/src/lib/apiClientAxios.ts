@@ -5,7 +5,7 @@
  */
 
 import { httpClient, getServerInfo } from "./http/axiosInterceptor";
-import { encryptionManager, EncryptionManager } from "./encryption";
+import { encryptionManager } from "./encryption";
 import type { ApiResponse } from "./http/axiosInterceptor";
 
 export { getServerInfo };
@@ -16,13 +16,13 @@ export type { ApiResponse };
  */
 class ApiClient {
   /**
-   * Initialize encryption with key from backend
+   * Initialize encryption via ECDH key exchange
+   * This establishes a secure shared secret without transmitting the key
    */
   async initializeEncryption(): Promise<void> {
     const { serverUrl } = getServerInfo();
-    const key = await EncryptionManager.fetchKeyFromBackend(serverUrl);
-    await encryptionManager.initialize(key);
-    console.log("✅ End-to-end encryption enabled (Axios)");
+    await encryptionManager.performKeyExchange(serverUrl);
+    console.log("✅ End-to-end encryption enabled via ECDH key exchange");
   }
 
   /**

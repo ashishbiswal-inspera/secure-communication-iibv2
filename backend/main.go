@@ -86,6 +86,18 @@ const (
 // Global variables
 var generatedConfigFile string
 var securityMgr *encryption.Manager
+var ecdhManager *encryption.ECDHManager
+
+// KeyExchangeRequest represents the ECDH key exchange request from frontend
+type KeyExchangeRequest struct {
+	PublicKey string `json:"publicKey"` // Base64 encoded P-256 public key
+}
+
+// KeyExchangeResponse represents the ECDH key exchange response to frontend
+type KeyExchangeResponse struct {
+	Success   bool   `json:"success"`
+	PublicKey string `json:"publicKey"` // Base64 encoded P-256 public key
+}
 
 // getFreePort asks the OS for a free open port that is ready to use
 func getFreePort() (int, error) {
@@ -438,15 +450,73 @@ func securePostHandler(ctx *SecureContext) (interface{}, error) {
 	}, nil
 }
 
-func main() {
-	// Initialize security manager with AES-GCM encryption
-	var err error
-	securityMgr, err = encryption.NewManager()
-	if err != nil {
-		log.Fatal("Failed to initialize security manager:", err)
+// handleKeyExchange handles ECDH key exchange with the frontend
+func handleKeyExchange(w http.ResponseWriter, r *http.Request) {
+	// Decode request containing frontend's public key
+	var req KeyExchangeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("Failed to decode key exchange request: %v", err)
+		w.Header().Set(contentTypeKey, jsonContentType)
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(KeyExchangeResponse{Success: false})
+		return
 	}
-	log.Printf("Security initialized with AES-256-GCM encryption")
-	log.Printf("Encryption key (hex): %s", securityMgr.GetKeyHex())
+
+	log.Printf("Received ECDH public key from frontend")
+
+	// Compute shared secret using ECDH
+	sharedSecret, err := ecdhManager.ComputeSharedSecret(req.PublicKey)
+	if err != nil {
+		log.Printf("Failed to compute shared secret: %v", err)
+		w.Header().Set(contentTypeKey, jsonContentType)
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(KeyExchangeResponse{Success: false})
+		return
+	}
+
+	// Derive AES-256 key from shared secret using HKDF
+	aesKey, err := encryption.DeriveAESKey(sharedSecret)
+	if err != nil {
+		log.Printf("Failed to derive AES key: %v", err)
+		w.Header().Set(contentTypeKey, jsonContentType)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(KeyExchangeResponse{Success: false})
+		return
+	}
+
+	// Initialize encryption manager with the derived key
+	securityMgr, err = encryption.NewManagerWithKeyBytes(aesKey)
+	if err != nil {
+		log.Printf("Failed to initialize encryption manager: %v", err)
+		w.Header().Set(contentTypeKey, jsonContentType)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(KeyExchangeResponse{Success: false})
+		return
+	}
+
+	log.Printf("✅ ECDH key exchange successful - AES-256-GCM encryption ready")
+
+	// Return backend's public key
+	response := KeyExchangeResponse{
+		Success:   true,
+		PublicKey: ecdhManager.GetPublicKeyBase64(),
+	}
+
+	w.Header().Set(contentTypeKey, jsonContentType)
+	json.NewEncoder(w).Encode(response)
+}
+
+func main() {
+	// Initialize ECDH manager for key exchange
+	var err error
+	ecdhManager, err = encryption.NewECDHManager()
+	if err != nil {
+		log.Fatal("Failed to initialize ECDH manager:", err)
+	}
+	log.Printf("🔐 ECDH P-256 keypair generated - awaiting key exchange")
+
+	// Security manager will be initialized after key exchange
+	// securityMgr is nil until frontend performs key exchange
 
 	// Get a free port from the OS
 	port, err := getFreePort()
@@ -520,18 +590,8 @@ func main() {
 			json.NewEncoder(w).Encode(response)
 		})
 
-		// Security endpoints
-		r.Get("/security/key", func(w http.ResponseWriter, r *http.Request) {
-			response := Response{
-				Success: true,
-				Message: "Encryption key",
-				Data: map[string]interface{}{
-					"key": securityMgr.GetKeyHex(),
-				},
-			}
-			w.Header().Set(contentTypeKey, jsonContentType)
-			json.NewEncoder(w).Encode(response)
-		})
+		// ECDH Key Exchange endpoint - must be called before using secure endpoints
+		r.Post("/key-exchange", handleKeyExchange)
 
 		// Secure endpoints using withSecure decorator
 		// All secure endpoints use POST method since encrypted requests need a body

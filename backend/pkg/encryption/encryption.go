@@ -41,6 +41,15 @@ func NewManager() (*Manager, error) {
 	if _, err := io.ReadFull(rand.Reader, key); err != nil {
 		return nil, fmt.Errorf("failed to generate AES key: %w", err)
 	}
+	return NewManagerWithKeyBytes(key)
+}
+
+// NewManagerWithKeyBytes creates a security manager with a provided AES key (raw bytes)
+// This is used after ECDH key exchange to initialize encryption with the derived key
+func NewManagerWithKeyBytes(key []byte) (*Manager, error) {
+	if len(key) != 32 {
+		return nil, fmt.Errorf("invalid key length: expected 32 bytes, got %d", len(key))
+	}
 
 	// Create AES cipher
 	block, err := aes.NewCipher(key)

@@ -1,7 +1,9 @@
 /**
  * Encryption utilities using Web Crypto API
- * Implements AES-256-GCM encryption with replay protection
+ * Implements AES-256-GCM encryption with ECDH key exchange and replay protection
  */
+
+import { ECDHKeyExchange } from "./crypto/ecdh";
 
 // Encrypted payload structure matching backend
 interface EncryptedPayload {
@@ -16,16 +18,75 @@ interface SecureRequest {
   payload: unknown; // Actual request data
 }
 
+// Key exchange response from backend
+interface KeyExchangeResponse {
+  success: boolean;
+  publicKey: string; // Base64 encoded P-256 public key
+}
+
 /**
- * Encryption Manager using Web Crypto API
+ * Encryption Manager using Web Crypto API with ECDH key exchange
  */
 export class EncryptionManager {
   private cryptoKey: CryptoKey | null = null;
+  private ecdh: ECDHKeyExchange;
+
+  constructor() {
+    this.ecdh = new ECDHKeyExchange();
+  }
 
   /**
-   * Initialize with AES key from backend (hex format)
+   * Perform ECDH key exchange with backend to establish shared secret
+   * This replaces the old fetchKeyFromBackend method
+   */
+  async performKeyExchange(serverUrl: string): Promise<void> {
+    console.log("🔐 Starting ECDH key exchange...");
+
+    // 1. Generate our ECDH keypair
+    await this.ecdh.generateKeyPair();
+    console.log("   ✓ Generated ECDH P-256 keypair");
+
+    // 2. Get our public key
+    const ourPublicKey = await this.ecdh.getPublicKeyBase64();
+
+    // 3. Send our public key to backend and receive theirs
+    const response = await fetch(`${serverUrl}/api/key-exchange`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ publicKey: ourPublicKey }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Key exchange failed: ${response.status}`);
+    }
+
+    const data: KeyExchangeResponse = await response.json();
+
+    if (!data.success || !data.publicKey) {
+      throw new Error("Key exchange failed: invalid response from server");
+    }
+
+    console.log("   ✓ Received backend's public key");
+
+    // 4. Compute shared secret
+    const sharedSecret = await this.ecdh.computeSharedSecret(data.publicKey);
+    console.log("   ✓ Computed shared secret");
+
+    // 5. Derive AES-256-GCM key from shared secret
+    this.cryptoKey = await this.ecdh.deriveAESKey(sharedSecret);
+    console.log("   ✓ Derived AES-256-GCM key");
+
+    console.log("✅ ECDH key exchange complete - encryption ready");
+  }
+
+  /**
+   * Initialize with AES key (hex format) - for backward compatibility
+   * @deprecated Use performKeyExchange() instead for better security
    */
   async initialize(keyHex: string): Promise<void> {
+    console.warn(
+      "⚠️ Using deprecated initialize() method. Consider using performKeyExchange() for better security."
+    );
     // Convert hex string to Uint8Array
     const keyBytes = this.hexToBytes(keyHex);
 
@@ -117,17 +178,14 @@ export class EncryptionManager {
   }
 
   /**
-   * Fetch encryption key from backend
+   * @deprecated Key exchange is now done via ECDH - use performKeyExchange() instead
+   * This method is kept for backward compatibility but should not be used
    */
-  static async fetchKeyFromBackend(serverUrl: string): Promise<string> {
-    const response = await fetch(`${serverUrl}/api/security/key`);
-    const data = await response.json();
-
-    if (!data.success || !data.data?.key) {
-      throw new Error("Failed to fetch encryption key");
-    }
-
-    return data.data.key;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  static async fetchKeyFromBackend(_serverUrl: string): Promise<string> {
+    throw new Error(
+      "fetchKeyFromBackend is deprecated. Use encryptionManager.performKeyExchange() instead for secure ECDH key exchange."
+    );
   }
 
   // Helper: Convert hex string to Uint8Array
