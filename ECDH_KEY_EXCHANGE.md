@@ -29,36 +29,36 @@ Implement **Elliptic Curve Diffie-Hellman (ECDH)** key exchange to replace the p
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                         APP STARTUP                                  │
+│                         APP STARTUP                                 │
 ├─────────────────────────────────────────────────────────────────────┤
-│                                                                      │
+│                                                                     │
 │   FRONTEND (React/TypeScript)           BACKEND (Go)                │
 │   ───────────────────────────           ────────────                │
-│                                                                      │
+│                                                                     │
 │   1. Generate ECDH P-256 keypair        1. Generate ECDH P-256      │
 │      - frontendPublicKey                   keypair on startup       │
 │      - frontendPrivateKey                  - backendPublicKey       │
 │                                            - backendPrivateKey      │
-│                                                                      │
-│   2. Call POST /api/key-exchange ────►  3. Receive frontend's      │
+│                                                                     │
+│   2. Call POST /api/key-exchange ────►  3. Receive frontend's       │
 │      Body: {                               public key               │
 │        publicKey: <base64>                                          │
 │      }                                  4. Compute shared secret:   │
 │                                            ECDH(backendPrivKey,     │
 │                                                 frontendPubKey)     │
-│                                                                      │
-│   6. Receive backend's public key ◄──── 5. Return response:        │
+│                                                                     │
+│   6. Receive backend's public key ◄──── 5. Return response:         │
 │      Response: {                           { publicKey: <base64> }  │
 │        publicKey: <base64>                                          │
 │      }                                                              │
-│                                                                      │
+│                                                                     │
 │   7. Compute shared secret:                                         │
 │      ECDH(frontendPrivKey,                                          │
 │           backendPubKey)                                            │
-│                                                                      │
-│   8. Derive AES-256 key using           8. Derive AES-256 key      │
+│                                                                     │
+│   8. Derive AES-256 key using           8. Derive AES-256 key       │
 │      HKDF from shared secret               using HKDF               │
-│                                                                      │
+│                                                                     │
 │   ══════════════════════════════════════════════════════════════════│
 │   RESULT: Both sides have the SAME AES-256-GCM key                  │
 │           Key was NEVER transmitted over the network!               │
