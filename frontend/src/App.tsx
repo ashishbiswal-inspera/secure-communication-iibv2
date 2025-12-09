@@ -5,6 +5,7 @@ import {
   getServerInfo,
   type ApiResponse,
 } from "@/lib/apiClientAxios";
+import BenchmarkPanel from "@/components/BenchmarkPanel";
 
 interface ApiRequest {
   name: string;
@@ -15,6 +16,7 @@ function App() {
   const [response, setResponse] = useState<ApiResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [encryptionReady, setEncryptionReady] = useState(false);
+  const [showBenchmarks, setShowBenchmarks] = useState(false);
   const { port, serverUrl } = getServerInfo();
 
   // Initialize encryption on mount
@@ -218,7 +220,23 @@ function App() {
           >
             🔒 Secure GET (Encrypted)
           </Button>
+
+          <Button
+            onClick={() => setShowBenchmarks(!showBenchmarks)}
+            variant="default"
+            size="lg"
+            className="bg-orange-600 hover:bg-orange-700 text-white"
+          >
+            📊 {showBenchmarks ? "Hide" : "Show"} Benchmarks
+          </Button>
         </div>
+
+        {/* Benchmark Panel */}
+        {showBenchmarks && (
+          <div className="mt-8 bg-slate-900/50 border border-slate-700 rounded-xl p-4">
+            <BenchmarkPanel />
+          </div>
+        )}
 
         {/* Loading */}
         {loading && (
