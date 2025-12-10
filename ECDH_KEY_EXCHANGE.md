@@ -1,4 +1,4 @@
-# ECDH Key Exchange Implementation Plan
+# eECDH Key Exchange Implementation Plan
 
 ## Overview
 
@@ -457,6 +457,72 @@ After implementing ECDH, remove:
 - ❌ Compromised endpoints (malware on user's machine)
 - ❌ Memory inspection attacks
 
+### Nonce & Replay Protection
+
+Our implementation uses **two types of nonces** for different purposes:
+
+#### 1. GCM Nonce (12 bytes) - Encryption Safety
+- **Purpose:** Required by AES-GCM algorithm to ensure identical plaintexts produce different ciphertexts
+- **Generated:** Fresh random 12-byte value for each encryption operation
+- **Why it matters:** Reusing a GCM nonce with the same key is catastrophic—it allows attackers to recover the authentication key and forge messages
+
+#### 2. Request Nonce (UUID) - Replay Attack Prevention
+- **Purpose:** Prevents attackers from capturing and re-sending valid encrypted requests
+- **How it works:** 
+  - Frontend generates a unique UUID for each request
+  - Backend tracks seen nonces in a set
+  - If a nonce is seen twice → request rejected
+- **Combined with timestamp:** Requests older than 5 seconds are rejected, allowing periodic nonce cache cleanup
+
+#### Why Nonces Are Critical
+
+| Attack Scenario | Without Nonce | With Nonce |
+|----------------|---------------|------------|
+| **Replay Attack** | Attacker captures encrypted "transfer $100" request and resends it 100 times | Each replay rejected—nonce already used |
+| **Duplicate Requests** | Network retry sends same request twice, processed twice | Second request rejected as duplicate |
+| **Timing Attack** | Old captured request replayed days later | Rejected—timestamp expired (>5 seconds) |
+| **GCM Nonce Reuse** | Same nonce + key = authentication key leaked | Fresh nonce every time = safe |
+
+#### Implementation Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     REQUEST WITH NONCE                              │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│   FRONTEND                              BACKEND                     │
+│   ────────                              ───────                     │
+│                                                                     │
+│   1. Generate request nonce             │                           │
+│      (UUID: "abc-123-def")              │                           │
+│                                         │                           │
+│   2. Create payload:                    │                           │
+│      {                                  │                           │
+│        timestamp: 1702123456789,        │                           │
+│        nonce: "abc-123-def",            │                           │
+│        data: { ... }                    │                           │
+│      }                                  │                           │
+│                                         │                           │
+│   3. Generate GCM nonce (12 bytes)      │                           │
+│                                         │                           │
+│   4. Encrypt with AES-GCM ──────────►   5. Decrypt payload          │
+│                                         │                           │
+│                                         6. Check timestamp:         │
+│                                            now - 1702123456789 < 5s?│
+│                                            ✓ Valid                  │
+│                                         │                           │
+│                                         7. Check nonce in cache:    │
+│                                            "abc-123-def" seen?      │
+│                                            ✗ Not seen → Accept      │
+│                                            ✓ Seen → REJECT (replay) │
+│                                         │                           │
+│                                         8. Add nonce to cache       │
+│                                         │                           │
+│                                         9. Process request          │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
 ### Additional Security (Optional)
 
 For maximum security, consider adding:
@@ -723,72 +789,72 @@ go test -bench=".*" -benchmem -run=^$
 
 ### Key Generation & Exchange
 
-| Benchmark | Iterations | Time/Op | Memory | Allocs |
-|-----------|------------|---------|--------|--------|
-| ECDH P-256 KeyPair Generation | 69,625 | **17.1 μs** | 432 B | 7 |
-| ECDH Key Exchange (shared secret) | 16,002 | **69.6 μs** | 128 B | 2 |
-| HKDF Key Derivation | 834,694 | **1.6 μs** | 1,344 B | 18 |
-| **Full Key Exchange Flow** | 12,673 | **94.2 μs** | 2,336 B | 34 |
+| Benchmark                         | Iterations | Time/Op            | Memory  | Allocs |
+| --------------------------------- | ---------- | ------------------ | ------- | ------ |
+| ECDH P-256 KeyPair Generation     | 69,625     | **17.1 μs** | 432 B   | 7      |
+| ECDH Key Exchange (shared secret) | 16,002     | **69.6 μs** | 128 B   | 2      |
+| HKDF Key Derivation               | 834,694    | **1.6 μs**  | 1,344 B | 18     |
+| **Full Key Exchange Flow**  | 12,673     | **94.2 μs** | 2,336 B | 34     |
 
 ### AES-256-GCM Encryption
 
-| Payload Size | Iterations | Time/Op | Throughput | Memory |
-|--------------|------------|---------|------------|--------|
-| 64 B | 4,240,484 | 280 ns | **229 MB/s** | 80 B |
-| 256 B | 3,392,793 | 352 ns | **727 MB/s** | 288 B |
-| 1 KB | 1,483,377 | 788 ns | **1.3 GB/s** | 1,152 B |
-| 4 KB | 446,444 | 2.5 μs | **1.7 GB/s** | 4,864 B |
-| 16 KB | 135,591 | 8.4 μs | **1.9 GB/s** | 18,432 B |
-| 64 KB | 34,876 | 33.8 μs | **1.9 GB/s** | 73,728 B |
-| 256 KB | 8,215 | 131 μs | **2.0 GB/s** | 270,336 B |
+| Payload Size | Iterations | Time/Op  | Throughput         | Memory    |
+| ------------ | ---------- | -------- | ------------------ | --------- |
+| 64 B         | 4,240,484  | 280 ns   | **229 MB/s** | 80 B      |
+| 256 B        | 3,392,793  | 352 ns   | **727 MB/s** | 288 B     |
+| 1 KB         | 1,483,377  | 788 ns   | **1.3 GB/s** | 1,152 B   |
+| 4 KB         | 446,444    | 2.5 μs  | **1.7 GB/s** | 4,864 B   |
+| 16 KB        | 135,591    | 8.4 μs  | **1.9 GB/s** | 18,432 B  |
+| 64 KB        | 34,876     | 33.8 μs | **1.9 GB/s** | 73,728 B  |
+| 256 KB       | 8,215      | 131 μs  | **2.0 GB/s** | 270,336 B |
 
 ### AES-256-GCM Decryption
 
-| Payload Size | Iterations | Time/Op | Throughput | Memory |
-|--------------|------------|---------|------------|--------|
-| 64 B | 9,164,677 | 127 ns | **505 MB/s** | 64 B |
-| 256 B | 5,678,427 | 203 ns | **1.3 GB/s** | 256 B |
-| 1 KB | 1,647,429 | 698 ns | **1.5 GB/s** | 1,024 B |
-| 4 KB | 513,175 | 2.5 μs | **1.6 GB/s** | 4,096 B |
-| 16 KB | 126,151 | 9.8 μs | **1.7 GB/s** | 16,384 B |
-| 64 KB | 33,193 | 35.5 μs | **1.8 GB/s** | 65,536 B |
+| Payload Size | Iterations | Time/Op  | Throughput         | Memory   |
+| ------------ | ---------- | -------- | ------------------ | -------- |
+| 64 B         | 9,164,677  | 127 ns   | **505 MB/s** | 64 B     |
+| 256 B        | 5,678,427  | 203 ns   | **1.3 GB/s** | 256 B    |
+| 1 KB         | 1,647,429  | 698 ns   | **1.5 GB/s** | 1,024 B  |
+| 4 KB         | 513,175    | 2.5 μs  | **1.6 GB/s** | 4,096 B  |
+| 16 KB        | 126,151    | 9.8 μs  | **1.7 GB/s** | 16,384 B |
+| 64 KB        | 33,193     | 35.5 μs | **1.8 GB/s** | 65,536 B |
 
 > **Performance Note:** The ~2 GB/s throughput is excellent—encryption adds only ~0.1-1% overhead to total request time. JSON serialization (~130μs) dominates over AES encryption (~13μs for 24KB). With AES-NI hardware acceleration, security is essentially "free" in terms of performance.
 
 ### Encryption Overhead (GCM Tag + Nonce)
 
-| Items | Original Size | Encrypted Size | Overhead |
-|-------|---------------|----------------|----------|
-| 1 item | 1,166 B | 1,182 B | **1.37%** |
-| 5 items | 5,920 B | 5,936 B | **0.27%** |
-| 10 items | 11,905 B | 11,921 B | **0.13%** |
-| 20 items | 23,987 B | 24,003 B | **0.07%** |
+| Items    | Original Size | Encrypted Size | Overhead        |
+| -------- | ------------- | -------------- | --------------- |
+| 1 item   | 1,166 B       | 1,182 B        | **1.37%** |
+| 5 items  | 5,920 B       | 5,936 B        | **0.27%** |
+| 10 items | 11,905 B      | 11,921 B       | **0.13%** |
+| 20 items | 23,987 B      | 24,003 B       | **0.07%** |
 
 ### JSON Serialization (Complex Objects, Depth 5)
 
-| Items | Marshal Time | Unmarshal Time | Memory (Marshal) |
-|-------|--------------|----------------|------------------|
-| 1 item | 6.5 μs | 20.9 μs | 1,978 B |
-| 5 items | 31.7 μs | 103.6 μs | 9,540 B |
-| 10 items | 64.0 μs | 221.3 μs | 19,061 B |
-| 20 items | 129.6 μs | 424.0 μs | 38,121 B |
-| 50 items | 322.9 μs | 1.06 ms | 99,525 B |
+| Items    | Marshal Time | Unmarshal Time | Memory (Marshal) |
+| -------- | ------------ | -------------- | ---------------- |
+| 1 item   | 6.5 μs      | 20.9 μs       | 1,978 B          |
+| 5 items  | 31.7 μs     | 103.6 μs      | 9,540 B          |
+| 10 items | 64.0 μs     | 221.3 μs      | 19,061 B         |
+| 20 items | 129.6 μs    | 424.0 μs      | 38,121 B         |
+| 50 items | 322.9 μs    | 1.06 ms        | 99,525 B         |
 
 ### End-to-End Secure Request/Response
 
-| Items | Key Reused | With Key Exchange | Memory (Key Reused) |
-|-------|------------|-------------------|---------------------|
-| 1 item | **66.6 μs** | 130.9 μs | 16,560 B |
-| 10 items | **647.9 μs** | 395.9 μs | 165,335 B |
-| 20 items | **1.21 ms** | 714.6 μs | 331,204 B |
+| Items    | Key Reused          | With Key Exchange | Memory (Key Reused) |
+| -------- | ------------------- | ----------------- | ------------------- |
+| 1 item   | **66.6 μs**  | 130.9 μs         | 16,560 B            |
+| 10 items | **647.9 μs** | 395.9 μs         | 165,335 B           |
+| 20 items | **1.21 ms**   | 714.6 μs         | 331,204 B           |
 
 ### Memory Allocation Summary
 
-| Operation | Time/Op | Memory/Op | Allocs/Op |
-|-----------|---------|-----------|-----------|
-| ECDH KeyPair | 17.1 μs | 432 B | 7 |
-| AES-GCM Setup | 775 ns | 1,280 B | 2 |
-| ComplexItem Marshal (20) | 134.0 μs | 38,111 B | 402 |
+| Operation                | Time/Op   | Memory/Op | Allocs/Op |
+| ------------------------ | --------- | --------- | --------- |
+| ECDH KeyPair             | 17.1 μs  | 432 B     | 7         |
+| AES-GCM Setup            | 775 ns    | 1,280 B   | 2         |
+| ComplexItem Marshal (20) | 134.0 μs | 38,111 B  | 402       |
 
 ### Key Takeaways
 
@@ -807,40 +873,38 @@ Benchmarks run on **December 9, 2025** in IcewormDebug/1.0 browser (Chromium-bas
 
 ### Key Generation & Exchange (Frontend)
 
-| Benchmark | Iterations | Avg Time | Min | Max |
-|-----------|------------|----------|-----|-----|
-| ECDH P-256 KeyPair Generation | 100 | **0.08 ms** | 0 ms | 0.3 ms |
-| ECDH Shared Secret Computation | 100 | **0.22 ms** | 0.1 ms | 1.3 ms |
-| HKDF-SHA256 Key Derivation | 500 | **0.14 ms** | 0 ms | 11.1 ms |
-| **Full ECDH Key Exchange Flow** | 50 | **0.67 ms** | 0.4 ms | 1.5 ms |
+| Benchmark                             | Iterations | Avg Time          | Min    | Max     |
+| ------------------------------------- | ---------- | ----------------- | ------ | ------- |
+| ECDH P-256 KeyPair Generation         | 100        | **0.08 ms** | 0 ms   | 0.3 ms  |
+| ECDH Shared Secret Computation        | 100        | **0.22 ms** | 0.1 ms | 1.3 ms  |
+| HKDF-SHA256 Key Derivation            | 500        | **0.14 ms** | 0 ms   | 11.1 ms |
+| **Full ECDH Key Exchange Flow** | 50         | **0.67 ms** | 0.4 ms | 1.5 ms  |
 
 ### AES-256-GCM Encryption (Frontend)
 
 | Payload | Encrypt Time | Decrypt Time | Size Before | Size After | Overhead |
-|---------|--------------|--------------|-------------|------------|----------|
-| 64 B | 0.08 ms | 0.06 ms | 64 B | 92 B | 43.75% |
-| 1 KB | 0.07 ms | 0.08 ms | 1,024 B | 1,052 B | 2.73% |
-| 10 KB | 0.09 ms | 0.12 ms | 10,240 B | 10,268 B | 0.27% |
-| 64 KB | 0.26 ms | 0.20 ms | 65,536 B | 65,564 B | 0.04% |
+| ------- | ------------ | ------------ | ----------- | ---------- | -------- |
+| 64 B    | 0.08 ms      | 0.06 ms      | 64 B        | 92 B       | 43.75%   |
+| 1 KB    | 0.07 ms      | 0.08 ms      | 1,024 B     | 1,052 B    | 2.73%    |
+| 10 KB   | 0.09 ms      | 0.12 ms      | 10,240 B    | 10,268 B   | 0.27%    |
+| 64 KB   | 0.26 ms      | 0.20 ms      | 65,536 B    | 65,564 B   | 0.04%    |
 
 ### JSON Serialization (Frontend)
 
-| Items | JSON.stringify | JSON.parse | Output Size |
-|-------|----------------|------------|-------------|
-| 1 item | 0.015 ms | 0.012 ms | 1,010 B |
-| 5 items | 0.066 ms | 0.072 ms | 5,125 B |
-| 10 items | 0.105 ms | 0.098 ms | 10,320 B |
-| 20 items | 0.209 ms | 0.199 ms | 20,835 B |
+| Items    | JSON.stringify | JSON.parse | Output Size |
+| -------- | -------------- | ---------- | ----------- |
+| 1 item   | 0.015 ms       | 0.012 ms   | 1,010 B     |
+| 5 items  | 0.066 ms       | 0.072 ms   | 5,125 B     |
+| 10 items | 0.105 ms       | 0.098 ms   | 10,320 B    |
+| 20 items | 0.209 ms       | 0.199 ms   | 20,835 B    |
 
 ### End-to-End Secure Request (Frontend)
 
-| Items | Key Reused | With Key Exchange | Payload Size | Encrypted Size | Overhead |
-|-------|------------|-------------------|--------------|----------------|----------|
-| 1 item | **0.20 ms** | 1.28 ms | 1,010 B | 1,038 B | 2.77% |
-| 5 items | **0.38 ms** | 1.34 ms | 5,125 B | 5,153 B | 0.55% |
-| 10 items | **0.63 ms** | 1.62 ms | 10,320 B | 10,348 B | 0.27% |
-| 20 items | **0.84 ms** | 1.95 ms | 20,835 B | 20,863 B | 0.13% |
+| Items    | Key Reused        | With Key Exchange | Payload Size | Encrypted Size | Overhead |
+| -------- | ----------------- | ----------------- | ------------ | -------------- | -------- |
+| 1 item   | **0.20 ms** | 1.28 ms           | 1,010 B      | 1,038 B        | 2.77%    |
+| 5 items  | **0.38 ms** | 1.34 ms           | 5,125 B      | 5,153 B        | 0.55%    |
+| 10 items | **0.63 ms** | 1.62 ms           | 10,320 B     | 10,348 B       | 0.27%    |
+| 20 items | **0.84 ms** | 1.95 ms           | 20,835 B     | 20,863 B       | 0.13%    |
 
 > **Frontend Note:** Web Crypto API performance is excellent for browser-based encryption. The ~1ms overhead for a full E2E cycle with 20 complex items is negligible compared to network latency. Key exchange happens once per session, so the 0.67ms cost is amortized over all subsequent requests.
-
-
