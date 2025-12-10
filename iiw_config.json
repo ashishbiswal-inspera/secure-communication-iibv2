@@ -2,7 +2,7 @@
   "allowCapture": false,
   "allowedUrlRegexps": [".*"],
   "allowedUrls": [
-    "http://localhost:9000",
+    "https://127.0.0.1:9000",
     "http://127.0.0.1:5173",
     "http://localhost:5173"
   ],
@@ -19,9 +19,10 @@
   "noDefaultCefArgs": false,
   "noToolbar": false,
   "quitPasswordHash": "",
+  "noProxyServer": true,
   "quitUrl": "",
   "shareContent": false,
-  "startUrls": ["http://localhost:5173"],
+  "startUrls": ["https://127.0.0.1:9000"],
   "urlRegexpWindows": {
     ".*": {
       "height": 1,
