@@ -1,26 +1,41 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
+import {
+  apiClient,
+  getServerInfo,
+  type ApiResponse,
+} from "@/lib/apiClientAxios";
+import BenchmarkPanel from "@/components/BenchmarkPanel";
 
 interface ApiRequest {
   name: string;
   email: string;
 }
 
-interface ApiResponse {
-  success: boolean;
-  message: string;
-  data?: ApiRequest;
-}
-
 function App() {
   const [response, setResponse] = useState<ApiResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [encryptionReady, setEncryptionReady] = useState(false);
+  const [showBenchmarks, setShowBenchmarks] = useState(false);
+  const { port, serverUrl } = getServerInfo();
+
+  // Initialize encryption on mount
+  useEffect(() => {
+    const initEncryption = async () => {
+      try {
+        await apiClient.initializeEncryption();
+        setEncryptionReady(true);
+      } catch (error) {
+        console.error("Failed to initialize encryption:", error);
+      }
+    };
+    initEncryption();
+  }, []);
 
   const handleGet = async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/get");
-      const data: ApiResponse = await res.json();
+      const data = await apiClient.get("/get");
       setResponse(data);
 
       // Clear response after 2 seconds
@@ -47,14 +62,7 @@ function App() {
         email: "john.doe@example.com",
       };
 
-      const res = await fetch("/api/post", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(requestBody),
-      });
-      const data: ApiResponse = await res.json();
+      const data = await apiClient.post("/post", requestBody);
       setResponse(data);
 
       // Clear response after 2 seconds
@@ -73,6 +81,74 @@ function App() {
     }
   };
 
+  const handleSecurePost = async () => {
+    if (!apiClient.isEncryptionReady()) {
+      setResponse({
+        success: false,
+        message: "Encryption not ready",
+      });
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const requestBody: ApiRequest = {
+        name: "Jane Secure",
+        email: "jane@encrypted.com",
+      };
+
+      const data = await apiClient.securePost<ApiRequest>(
+        "/secure/post",
+        requestBody
+      );
+      setResponse(data);
+
+      // Clear response after 2 seconds
+      setTimeout(() => {
+        setResponse(null);
+      }, 2000);
+    } catch (error) {
+      console.error("Secure POST request failed:", error);
+      setResponse({
+        success: false,
+        message: "Secure request failed",
+      });
+      setTimeout(() => setResponse(null), 2000);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSecureGet = async () => {
+    if (!apiClient.isEncryptionReady()) {
+      setResponse({
+        success: false,
+        message: "Encryption not ready",
+      });
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const data = await apiClient.secureGet("/get");
+      setResponse(data);
+
+      // Clear response after 2 seconds
+      setTimeout(() => {
+        setResponse(null);
+      }, 2000);
+    } catch (error) {
+      console.error("Secure GET request failed:", error);
+      setResponse({
+        success: false,
+        message: "Secure GET request failed",
+      });
+      setTimeout(() => setResponse(null), 2000);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-purple-900 to-slate-950 flex items-center justify-center p-8">
       <div className="max-w-2xl w-full space-y-8">
@@ -84,10 +160,27 @@ function App() {
           <p className="text-slate-400">
             Test your API endpoints (Auto-reload enabled sure)
           </p>
+          <div className="mt-4 p-4 bg-slate-800/50 border border-slate-700 rounded-lg text-sm">
+            <p className="text-slate-300">
+              <span className="font-semibold text-cyan-400">Server:</span>{" "}
+              {serverUrl}
+            </p>
+            <p className="text-slate-300">
+              <span className="font-semibold text-cyan-400">Port:</span> {port}
+            </p>
+            <p className="text-slate-300">
+              <span className="font-semibold text-cyan-400">Encryption:</span>{" "}
+              {encryptionReady ? (
+                <span className="text-green-400">✓ AES-256-GCM Ready</span>
+              ) : (
+                <span className="text-yellow-400">⏳ Initializing...</span>
+              )}
+            </p>
+          </div>
         </div>
 
         {/* Buttons */}
-        <div className="flex gap-4 justify-center">
+        <div className="flex gap-4 justify-center flex-wrap">
           <Button
             onClick={handleGet}
             disabled={loading}
@@ -107,7 +200,43 @@ function App() {
           >
             POST Request
           </Button>
+
+          <Button
+            onClick={handleSecurePost}
+            disabled={loading || !encryptionReady}
+            variant="default"
+            size="lg"
+            className="bg-purple-600 hover:bg-purple-700 text-white"
+          >
+            🔒 Secure POST (Encrypted)
+          </Button>
+
+          <Button
+            onClick={handleSecureGet}
+            disabled={loading || !encryptionReady}
+            variant="default"
+            size="lg"
+            className="bg-cyan-600 hover:bg-cyan-700 text-white"
+          >
+            🔒 Secure GET (Encrypted)
+          </Button>
+
+          <Button
+            onClick={() => setShowBenchmarks(!showBenchmarks)}
+            variant="default"
+            size="lg"
+            className="bg-orange-600 hover:bg-orange-700 text-white"
+          >
+            📊 {showBenchmarks ? "Hide" : "Show"} Benchmarks
+          </Button>
         </div>
+
+        {/* Benchmark Panel */}
+        {showBenchmarks && (
+          <div className="mt-8 bg-slate-900/50 border border-slate-700 rounded-xl p-4">
+            <BenchmarkPanel />
+          </div>
+        )}
 
         {/* Loading */}
         {loading && (
@@ -143,7 +272,7 @@ function App() {
                 <span className="font-semibold text-slate-300">Message: </span>
                 <span className="text-white">{response.message}</span>
               </div>
-              {response.data && (
+              {response.data ? (
                 <div>
                   <span className="font-semibold text-slate-300 block mb-2">
                     Data:
@@ -152,7 +281,7 @@ function App() {
                     {JSON.stringify(response.data, null, 2)}
                   </pre>
                 </div>
-              )}
+              ) : null}
             </div>
           </div>
         )}

@@ -1,0 +1,4 @@
+- Benchmarking of encryption and decryption functions
+- encrypt GET also
+- Websequence diagram for encryption flow
+- Refactored encryption code into a separate module
